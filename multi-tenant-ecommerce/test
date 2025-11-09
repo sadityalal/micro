@@ -1,0 +1,325 @@
+
+Complete Multi-Tenant E-Commerce Platform Plan
+
+1. Architecture Overview
+
+Core Philosophy:
+
+Multi-Tenant SaaS - Single codebase, multiple stores
+Only Production - No environment distinctions
+Database-Driven Configuration - All settings in DB with tenant_id
+Microservices Architecture - Python FastAPI services
+HTTPS First - SSL from development
+Infrastructure Separation - DB/RabbitMQ/Redis in separate Docker
+2. Technology Stack
+
+Backend (Python)
+
+Framework: FastAPI
+Microservices: 8 independent services
+Database: PostgreSQL (single database, tenant isolation via tenant_id)
+Cache & Sessions: Redis (tenant-aware keys)
+Message Broker: RabbitMQ
+Background Jobs: Celery
+API Documentation: Auto-generated OpenAPI/Swagger
+Frontend
+
+Framework: Next.js 14 (React/TypeScript)
+Styling: Your existing Bootstrap template + Tenant-specific themes
+State Management: Zustand/Redux Toolkit
+API Communication: React Query + Axios
+Infrastructure
+
+Containerization: Docker + Docker Compose
+Database: PostgreSQL (Docker)
+Cache: Redis (Docker)
+Message Broker: RabbitMQ (Docker)
+Reverse Proxy: Nginx (SSL termination, tenant routing)
+3. Multi-Tenant Strategy
+
+Tenant Identification:
+
+Subdomain: tenant1.mysaas.com, tenant2.mysaas.com
+Custom Domain: tenant1.com, store-tenant.com
+Path-based (optional): mysaas.com/tenant1
+Data Isolation:
+
+Single Database with tenant_id on all tables
+Row-level security via tenant_id
+Redis key namespacing: tenant:{id}:{key}
+Complete data separation between tenants
+4. Microservices Structure
+
+Service 1: API Gateway
+
+Role: Tenant identification, routing, rate limiting
+Features: Request routing, tenant middleware, CORS, request logging
+Service 2: Tenant Service
+
+Role: Tenant management, domain resolution
+Features: Tenant lookup, domain validation, tenant status checks
+Service 3: User Service
+
+Role: User management, authentication (tenant-aware)
+Features: Registration, login, profile management, JWT tokens
+Service 4: Product Service
+
+Role: Product catalog, categories, inventory (tenant-aware)
+Features: Product CRUD, categories, search, inventory management
+Service 5: Cart Service
+
+Role: Shopping cart management (tenant-aware)
+Features: Guest cart, user cart, cart merging, quantity validation
+Service 6: Order Service
+
+Role: Order processing, order history (tenant-aware)
+Features: Order creation, status tracking, order history
+Service 7: Payment Service
+
+Role: Payment processing (tenant-aware payment gateways)
+Features: Multiple payment gateways, transaction tracking
+Service 8: Notification Service
+
+Role: All communications (tenant-aware templates)
+Features: Email, SMS, WhatsApp, Telegram, push notifications
+Service 9: Settings Service
+
+Role: Central configuration management (tenant-specific)
+Features: Dynamic settings, feature flags, provider configurations
+5. Database Schema Design
+
+Core Tenant Table
+
+sql
+CREATE TABLE tenants (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(100) NOT NULL,
+    slug VARCHAR(50) UNIQUE NOT NULL,
+    domain VARCHAR(255) UNIQUE,
+    subdomain VARCHAR(100) UNIQUE,
+    status VARCHAR(20) DEFAULT 'active',
+    plan_type VARCHAR(50) DEFAULT 'starter',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+Unified Settings Tables (with tenant_id)
+
+sql
+-- Site Settings
+CREATE TABLE site_settings (
+    id SERIAL PRIMARY KEY,
+    tenant_id INTEGER REFERENCES tenants(id) NOT NULL,
+    setting_key VARCHAR(100) NOT NULL,
+    setting_value TEXT NOT NULL,
+    data_type VARCHAR(20) DEFAULT 'string',
+    UNIQUE(tenant_id, setting_key)
+);
+
+-- Frontend Settings
+CREATE TABLE frontend_settings (
+    id SERIAL PRIMARY KEY,
+    tenant_id INTEGER REFERENCES tenants(id) NOT NULL,
+    setting_key VARCHAR(100) NOT NULL,
+    setting_value JSONB NOT NULL,
+    UNIQUE(tenant_id, setting_key)
+);
+
+-- Payment Settings
+CREATE TABLE payment_settings (
+    id SERIAL PRIMARY KEY,
+    tenant_id INTEGER REFERENCES tenants(id) NOT NULL,
+    setting_key VARCHAR(100) NOT NULL,
+    setting_value TEXT NOT NULL,
+    is_secret BOOLEAN DEFAULT false,
+    UNIQUE(tenant_id, setting_key)
+);
+
+-- Notification Settings
+CREATE TABLE notification_settings (
+    id SERIAL PRIMARY KEY,
+    tenant_id INTEGER REFERENCES tenants(id) NOT NULL,
+    setting_key VARCHAR(100) NOT NULL,
+    setting_value TEXT NOT NULL,
+    is_secret BOOLEAN DEFAULT false,
+    UNIQUE(tenant_id, setting_key)
+);
+
+-- Session Settings, Rate Limit Settings, Shipping Settings, Tax Settings (similar structure)
+Business Tables (All Tenant-Aware)
+
+sql
+-- All business tables include tenant_id
+CREATE TABLE products (
+    id SERIAL PRIMARY KEY,
+    tenant_id INTEGER REFERENCES tenants(id) NOT NULL,
+    name VARCHAR(255) NOT NULL,
+    price DECIMAL(10,2) NOT NULL,
+    -- ... other fields
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE users (
+    id SERIAL PRIMARY KEY,
+    tenant_id INTEGER REFERENCES tenants(id) NOT NULL,
+    email VARCHAR(255) NOT NULL,
+    -- ... other fields
+    UNIQUE(tenant_id, email)
+);
+
+CREATE TABLE categories (
+    id SERIAL PRIMARY KEY,
+    tenant_id INTEGER REFERENCES tenants(id) NOT NULL,
+    name VARCHAR(255) NOT NULL,
+    -- ... other fields
+);
+
+CREATE TABLE carts (
+    id SERIAL PRIMARY KEY,
+    tenant_id INTEGER REFERENCES tenants(id) NOT NULL,
+    user_id INTEGER REFERENCES users(id),
+    session_id VARCHAR(255), -- for guest carts
+    -- ... other fields
+);
+
+CREATE TABLE orders (
+    id SERIAL PRIMARY KEY,
+    tenant_id INTEGER REFERENCES tenants(id) NOT NULL,
+    user_id INTEGER REFERENCES users(id),
+    order_number VARCHAR(100) NOT NULL,
+    -- ... other fields
+    UNIQUE(tenant_id, order_number)
+);
+
+-- Similarly for: cart_items, order_items, payments, reviews, wishlists, etc.
+6. Tenant Identification Flow
+
+Backend Middleware:
+
+python
+async def tenant_middleware(request: Request, call_next):
+    # Extract tenant from host
+    host = request.headers.get('host', '')
+    tenant = await tenant_service.identify_tenant(host)
+    
+    if not tenant or tenant.status != 'active':
+        return JSONResponse({'error': 'Store not found'}, status=404)
+    
+    # Add tenant to request state
+    request.state.tenant = tenant
+    response = await call_next(request)
+    return response
+Database Query Pattern:
+
+python
+# All queries automatically include tenant_id
+async def get_products(tenant_id: int, filters: dict):
+    query = select(Product).where(
+        Product.tenant_id == tenant_id,
+        # ... other filters
+    )
+    return await database.fetch_all(query)
+Redis Key Pattern:
+
+python
+# Tenant-aware Redis keys
+def get_tenant_key(tenant_id: int, key: str) -> str:
+    return f"tenant:{tenant_id}:{key}"
+7. Security & Performance Features
+
+Multi-Tenant Security:
+
+Tenant Isolation: All queries include tenant_id
+JWT Authentication: Tokens include tenant_id
+Rate Limiting: Per tenant + per user
+Data Leak Protection: Middleware ensures tenant context
+Performance:
+
+Redis Caching: Tenant-aware cache keys
+Database Indexing: Composite indexes on (tenant_id, id)
+Connection Pooling: Shared across tenants
+Background Processing: Tenant-aware job queues
+Race Condition Protection:
+
+Tenant-aware Locks: Redis locks with tenant prefix
+Database Transactions: With tenant context
+Optimistic Locking: Version numbers per tenant
+8. Key User Flows
+
+Tenant Onboarding:
+
+Admin creates tenant → Generates subdomain → Sets up settings
+Tenant admin configures their store (payment, notification, theme)
+Store goes live with custom domain/subdomain
+Customer Flow (Per Tenant):
+
+Visit tenant URL → Tenant identification → Load tenant settings
+Browse products → Add to cart → Checkout
+Register/Login → Cart merged → Payment → Order confirmation
+Cart Merging Logic (Tenant-aware):
+
+Guest cart items merged into user cart within same tenant
+Tenant-specific quantity limits enforced
+Tenant-specific price validation
+9. Deployment Architecture
+
+Infrastructure Layer (Docker Compose 1)
+
+text
+PostgreSQL → Redis → RabbitMQ
+Services Layer (Docker Compose 2)
+
+text
+API Gateway → [Tenant, User, Product, Cart, Order, Payment, Notification, Settings Services]
+Frontend Layer
+
+text
+Next.js App (Multi-tenant) → API Gateway → Microservices
+10. Configuration Management
+
+No Environment Variables (except DB connection)
+
+python
+# All settings come from database with tenant context
+tenant_id = request.state.tenant.id
+stripe_secret = await settings_service.get(tenant_id, 'payment', 'stripe_secret_key')
+theme_config = await settings_service.get(tenant_id, 'frontend', 'theme')
+Tenant-Specific Configuration:
+
+Each tenant has complete settings independence
+Change settings without affecting other tenants
+Feature flags per tenant
+Payment provider selection per tenant
+11. Monitoring & Maintenance
+
+Multi-Tenant Analytics:
+
+Tenant-level performance metrics
+Per-tenant sales analytics
+Tenant health monitoring
+Admin Features:
+
+Super admin dashboard for all tenants
+Tenant management (create, suspend, delete)
+Cross-tenant analytics (optional)
+12. Scaling Strategy
+
+Horizontal Scaling:
+
+Microservices can scale independently
+Redis clustering for cache
+Database read replicas
+Tenant-aware load balancing
+Tenant Limits:
+
+Plan-based limits (products, orders, storage)
+Rate limiting per tenant
+Automated tenant resource monitoring
+Ready to Begin Implementation!
+
+Next Steps:
+
+✅ Complete Plan - Done
+Database Schema - Detailed table structures
+Infrastructure Setup - Docker compose files
+Microservices Skeleton - FastAPI services with tenant middleware
+Shall I start with the detailed database schema design?
