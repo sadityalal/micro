@@ -15,6 +15,18 @@ CREATE TYPE payment_method_type AS ENUM ('bank', 'upi', 'wallet', 'card', 'net_b
 CREATE TYPE payment_gateway AS ENUM ('razorpay', 'stripe', 'paypal', 'paytm', 'phonepe', 'google_pay', 'instamojo', 'ccavenue', 'custom');
 CREATE TYPE bank_status AS ENUM ('active', 'inactive', 'maintenance');
 CREATE TYPE upi_type AS ENUM ('public', 'private');
+-- Enhanced security and configuration tables
+CREATE TYPE password_policy_type AS ENUM ('basic', 'medium', 'strong', 'custom');
+CREATE TYPE username_policy_type AS ENUM ('email', 'any', 'custom');
+CREATE TYPE rate_limit_strategy AS ENUM ('fixed_window', 'sliding_window', 'token_bucket');
+CREATE TYPE session_storage_type AS ENUM ('redis', 'database', 'jwt');
+CREATE TYPE session_timeout_type AS ENUM ('absolute', 'sliding');
+CREATE TYPE service_status AS ENUM ('active', 'maintenance', 'disabled');
+CREATE TYPE database_type AS ENUM ('postgresql', 'mysql', 'mongodb');
+CREATE TYPE cache_type AS ENUM ('redis', 'memcached', 'local');
+CREATE TYPE queue_type AS ENUM ('rabbitmq', 'redis', 'sqs', 'kafka');
+
+
 
 -- Core User & Roles
 CREATE TABLE users (
@@ -735,6 +747,132 @@ CREATE TABLE payment_method_details (
     )
 );
 
+CREATE TABLE login_settings (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    password_policy password_policy_type DEFAULT 'medium',
+    min_password_length INTEGER DEFAULT 8,
+    require_uppercase BOOLEAN DEFAULT TRUE,
+    require_lowercase BOOLEAN DEFAULT TRUE,
+    require_numbers BOOLEAN DEFAULT TRUE,
+    require_special_chars BOOLEAN DEFAULT TRUE,
+    max_password_age_days INTEGER DEFAULT 90,
+    password_history_count INTEGER DEFAULT 5,
+    max_login_attempts INTEGER DEFAULT 5,
+    lockout_duration_minutes INTEGER DEFAULT 30,
+    username_policy username_policy_type DEFAULT 'email',
+    session_timeout_minutes INTEGER DEFAULT 30,
+    mfa_required BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(tenant_id)
+);
+
+CREATE TABLE session_settings (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    storage_type session_storage_type DEFAULT 'redis',
+    timeout_type session_timeout_type DEFAULT 'sliding',
+    session_timeout_minutes INTEGER DEFAULT 30,
+    absolute_timeout_minutes INTEGER DEFAULT 480, -- 8 hours
+    sliding_timeout_minutes INTEGER DEFAULT 30,
+    max_concurrent_sessions INTEGER DEFAULT 5,
+    regenerate_session BOOLEAN DEFAULT TRUE,
+    secure_cookies BOOLEAN DEFAULT TRUE,
+    http_only_cookies BOOLEAN DEFAULT TRUE,
+    same_site_policy VARCHAR(20) DEFAULT 'lax',
+    cookie_domain VARCHAR(255),
+    cookie_path VARCHAR(100) DEFAULT '/',
+    enable_session_cleanup BOOLEAN DEFAULT TRUE,
+    cleanup_interval_minutes INTEGER DEFAULT 60,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(tenant_id)
+);
+
+CREATE TABLE rate_limit_settings (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    strategy rate_limit_strategy DEFAULT 'fixed_window',
+    requests_per_minute INTEGER DEFAULT 60,
+    requests_per_hour INTEGER DEFAULT 1000,
+    requests_per_day INTEGER DEFAULT 10000,
+    burst_capacity INTEGER DEFAULT 10,
+    enabled BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(tenant_id)
+);
+
+CREATE TABLE logging_settings (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    log_level VARCHAR(10) DEFAULT 'INFO',
+    enable_audit_log BOOLEAN DEFAULT TRUE,
+    enable_access_log BOOLEAN DEFAULT TRUE,
+    enable_security_log BOOLEAN DEFAULT TRUE,
+    retention_days INTEGER DEFAULT 30,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(tenant_id)
+);
+
+CREATE TABLE infrastructure_settings (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    service_name VARCHAR(100) NOT NULL,
+    service_type VARCHAR(50) NOT NULL,
+    host VARCHAR(255) NOT NULL,
+    port INTEGER,
+    username VARCHAR(255),
+    password VARCHAR(255),
+    database_name VARCHAR(100),
+    connection_string TEXT,
+    max_connections INTEGER DEFAULT 20,
+    timeout_seconds INTEGER DEFAULT 30,
+    status service_status DEFAULT 'active',
+    health_check_url VARCHAR(500),
+    metadata JSONB,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(tenant_id, service_name)
+);
+
+CREATE TABLE service_urls (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    service_name VARCHAR(100) NOT NULL,
+    base_url VARCHAR(500) NOT NULL,
+    health_endpoint VARCHAR(200),
+    api_version VARCHAR(20),
+    timeout_ms INTEGER DEFAULT 30000,
+    retry_attempts INTEGER DEFAULT 3,
+    circuit_breaker_enabled BOOLEAN DEFAULT TRUE,
+    status service_status DEFAULT 'active',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(tenant_id, service_name)
+);
+
+CREATE TABLE security_settings (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    jwt_secret_key VARCHAR(255) NOT NULL,
+    jwt_algorithm VARCHAR(20) DEFAULT 'HS256',
+    access_token_expiry_minutes INTEGER DEFAULT 30,
+    refresh_token_expiry_days INTEGER DEFAULT 7,
+    password_reset_expiry_minutes INTEGER DEFAULT 30,
+    max_login_attempts INTEGER DEFAULT 5,
+    account_lockout_minutes INTEGER DEFAULT 30,
+    require_https BOOLEAN DEFAULT TRUE,
+    cors_origins JSONB DEFAULT '["http://localhost:3000"]',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(tenant_id)
+);
+
+
+
 -- Indexes for better performance
 CREATE INDEX idx_users_tenant_id ON users(tenant_id);
 CREATE INDEX idx_users_email ON users(email);
@@ -763,6 +901,62 @@ CREATE INDEX idx_payment_method_details_payment ON payment_method_details(paymen
 CREATE INDEX idx_payment_method_details_bank ON payment_method_details(bank_id);
 CREATE INDEX idx_payment_method_details_upi ON payment_method_details(upi_id);
 CREATE INDEX idx_payment_method_details_wallet ON payment_method_details(wallet_id);
+-- Indexes for login_settings
+CREATE INDEX idx_login_settings_tenant_id ON login_settings(tenant_id);
+CREATE INDEX idx_login_settings_updated_at ON login_settings(updated_at);
+
+-- Indexes for session_settings
+CREATE INDEX idx_session_settings_tenant_id ON session_settings(tenant_id);
+CREATE INDEX idx_session_settings_updated_at ON session_settings(updated_at);
+
+-- Indexes for rate_limit_settings
+CREATE INDEX idx_rate_limit_settings_tenant_id ON rate_limit_settings(tenant_id);
+CREATE INDEX idx_rate_limit_settings_updated_at ON rate_limit_settings(updated_at);
+
+-- Indexes for logging_settings
+CREATE INDEX idx_logging_settings_tenant_id ON logging_settings(tenant_id);
+CREATE INDEX idx_logging_settings_updated_at ON logging_settings(updated_at);
+
+-- Additional indexes for existing tables that might be missing
+CREATE INDEX idx_sessions_user_id ON sessions(user_id);
+CREATE INDEX idx_sessions_tenant_id ON sessions(tenant_id);
+CREATE INDEX idx_sessions_expires_at ON sessions(expires_at);
+CREATE INDEX idx_login_history_user_id ON login_history(user_id);
+CREATE INDEX idx_login_history_tenant_id ON login_history(tenant_id);
+CREATE INDEX idx_login_history_login_time ON login_history(login_time);
+CREATE INDEX idx_activity_logs_tenant_id ON activity_logs(tenant_id);
+CREATE INDEX idx_activity_logs_created_at ON activity_logs(created_at);
+CREATE INDEX idx_notification_logs_created_at ON notification_logs(created_at);
+CREATE INDEX idx_notification_logs_status ON notification_logs(status);
+
+-- Composite indexes for better performance
+CREATE INDEX idx_sessions_tenant_user ON sessions(tenant_id, user_id);
+CREATE INDEX idx_login_history_tenant_user_time ON login_history(tenant_id, user_id, login_time);
+CREATE INDEX idx_activity_logs_tenant_action_time ON activity_logs(tenant_id, action, created_at);
+-- Indexes for new infrastructure tables
+CREATE INDEX idx_infrastructure_settings_tenant_id ON infrastructure_settings(tenant_id);
+CREATE INDEX idx_infrastructure_settings_service_name ON infrastructure_settings(service_name);
+CREATE INDEX idx_infrastructure_settings_service_type ON infrastructure_settings(service_type);
+CREATE INDEX idx_infrastructure_settings_status ON infrastructure_settings(status);
+CREATE INDEX idx_infrastructure_settings_updated_at ON infrastructure_settings(updated_at);
+
+CREATE INDEX idx_service_urls_tenant_id ON service_urls(tenant_id);
+CREATE INDEX idx_service_urls_service_name ON service_urls(service_name);
+CREATE INDEX idx_service_urls_status ON service_urls(status);
+CREATE INDEX idx_service_urls_updated_at ON service_urls(updated_at);
+
+CREATE INDEX idx_security_settings_tenant_id ON security_settings(tenant_id);
+CREATE INDEX idx_security_settings_updated_at ON security_settings(updated_at);
+
+-- Composite indexes for infrastructure queries
+CREATE INDEX idx_infrastructure_tenant_service ON infrastructure_settings(tenant_id, service_name);
+CREATE INDEX idx_infrastructure_tenant_type ON infrastructure_settings(tenant_id, service_type);
+CREATE INDEX idx_service_urls_tenant_base ON service_urls(tenant_id, base_url);
+
+-- Performance indexes for frequently queried settings
+CREATE INDEX idx_tenant_system_settings_tenant_key ON tenant_system_settings(tenant_id, setting_key);
+CREATE INDEX idx_system_settings_key ON system_settings(setting_key);
+CREATE INDEX idx_site_settings_tenant_key ON site_settings(tenant_id, setting_key);
 
 -- Add foreign key from users to tenants
 ALTER TABLE users ADD CONSTRAINT fk_users_tenant
@@ -839,3 +1033,50 @@ ON CONFLICT DO NOTHING;
 
 -- Reload configuration
 SELECT pg_reload_conf();
+
+-- Insert default settings for tenant 1
+INSERT INTO login_settings (tenant_id) VALUES (1);
+INSERT INTO session_settings (tenant_id) VALUES (1);
+INSERT INTO rate_limit_settings (tenant_id) VALUES (1);
+INSERT INTO logging_settings (tenant_id) VALUES (1);
+
+-- Insert infrastructure settings for tenant 1
+INSERT INTO infrastructure_settings (tenant_id, service_name, service_type, host, port, username, password, database_name) VALUES
+-- Database
+(1, 'main_database', 'postgresql', 'postgres', 5432, 'root', 'root123', 'pavitra_db'),
+-- Redis
+(1, 'cache_redis', 'redis', 'redis', 6379, '', '', '0'),
+(1, 'session_redis', 'redis', 'redis', 6379, '', '', '1'),
+-- RabbitMQ
+(1, 'message_queue', 'rabbitmq', 'rabbitmq', 5672, 'guest', 'guest', '');
+
+-- Insert service URLs
+INSERT INTO service_urls (tenant_id, service_name, base_url, health_endpoint) VALUES
+-- Internal Services
+(1, 'auth_service', 'http://auth:8000', '/health'),
+(1, 'product_service', 'http://product:8001', '/health'),
+(1, 'order_service', 'http://order:8002', '/health'),
+(1, 'payment_service', 'http://payment:8003', '/health'),
+(1, 'notification_service', 'http://notification:8004', '/health'),
+-- External Services
+(1, 'razorpay_api', 'https://api.razorpay.com/v1', '/'),
+(1, 'stripe_api', 'https://api.stripe.com/v1', '/');
+
+-- Insert security settings
+INSERT INTO security_settings (tenant_id, jwt_secret_key) VALUES
+(1, 'your-super-secure-jwt-secret-key-change-in-production');
+
+-- Insert system settings (for global configurations)
+INSERT INTO system_settings (setting_key, setting_value, setting_type) VALUES
+-- Application
+('app_name', 'Pavitra E-Commerce', 'string'),
+('app_version', '1.0.0', 'string'),
+('environment', 'development', 'string'),
+-- Features
+('multi_tenant_enabled', 'true', 'boolean'),
+('auto_migrations', 'true', 'boolean'),
+('enable_swagger', 'true', 'boolean'),
+-- Performance
+('default_page_size', '20', 'integer'),
+('max_page_size', '100', 'integer'),
+('cache_default_ttl', '300', 'integer');
