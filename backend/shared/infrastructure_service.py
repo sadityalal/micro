@@ -1,170 +1,145 @@
-import redis.asyncio as redis
-from typing import Optional, Dict, Any
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
-from sqlalchemy.engine.url import URL
+# backend/shared/infrastructure_service.py
+"""
+THE REAL FINAL INFRASTRUCTURE SERVICE — NOVEMBER 15, 2025
+100% YOUR VISION. ZERO COMPROMISE.
+"""
+
 import asyncio
-import os
+from contextlib import asynccontextmanager
+from typing import Dict, Any, Optional, AsyncGenerator
+
+import redis.asyncio as redis
+import aio_pika
+import aiokafka
+from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine, async_sessionmaker, AsyncSession
+from sqlalchemy.engine.url import URL
+
+from .config import get_tenant_config
 from .database import async_session
-from .logger import get_logger
+from .logger_middleware import get_logger
 
 logger = get_logger(__name__)
 
 
 class InfrastructureService:
     def __init__(self):
-        self._redis_pools: Dict[str, redis.Redis] = {}
-        self._db_engines: Dict[str, Any] = {}
-        self._session_makers: Dict[str, Any] = {}
-        self._cache_lock = asyncio.Lock()
+        self._redis_pools: Dict[str, redis.ConnectionPool] = {}
+        self._rabbitmq_connections: Dict[int, aio_pika.RobustConnection] = {}
+        self._kafka_producers: Dict[int, aiokafka.AIOKafkaProducer] = {}
+        self._db_engines: Dict[int, AsyncEngine] = {}
+        self._session_makers: Dict[int, async_sessionmaker] = {}
+        self._lock = asyncio.Lock()
 
-    async def get_redis_client(self, tenant_id: int, purpose: str) -> redis.Redis:
-        """
-        Get Redis client for specific tenant and purpose from database configuration
-        """
-        cache_key = f"{tenant_id}:{purpose}"
+    # ─── Redis (per tenant + purpose) ─────────────────────────────────────
+    async def get_redis_client(self, tenant_id: int, purpose: str = "cache") -> redis.Redis:
+        key = f"{tenant_id}:{purpose}"
+        async with self._lock:
+            if key not in self._redis_pools:
+                config = await get_tenant_config(tenant_id)
+                redis_cfg = config["infrastructure"].get(f"{purpose}_redis")
+                if not redis_cfg:
+                    raise ValueError(f"Redis {purpose} not configured for tenant {tenant_id}")
 
-        async with self._cache_lock:
-            if cache_key in self._redis_pools:
-                return self._redis_pools[cache_key]
+                pool = redis.ConnectionPool(
+                    host=redis_cfg["host"],
+                    port=redis_cfg.get("port", 6379),
+                    db=redis_cfg.get("database_name", 0),
+                    password=redis_cfg.get("password"),
+                    username=redis_cfg.get("username"),
+                    max_connections=20,
+                    decode_responses=True,
+                    health_check_interval=30,
+                )
+                self._redis_pools[key] = pool
+                logger.info(f"Redis pool created: {key}")
 
-            try:
-                # Get Redis configuration from database
-                async with async_session() as db:
-                    result = await db.execute(
-                        "SELECT host, port, database_name, username, password "
-                        "FROM infrastructure_settings "
-                        "WHERE tenant_id = :tid AND service_name = :service_name AND service_type = 'redis'",
-                        {"tid": tenant_id, "service_name": f"{purpose}_redis"}
-                    )
-                    config = result.fetchone()
+            return redis.Redis(connection_pool=self._redis_pools[key])
 
-                    if not config:
-                        # Fallback to environment-based configuration
-                        redis_host = os.getenv(f"REDIS_{purpose.upper()}_HOST", "redis")
-                        redis_port = int(os.getenv(f"REDIS_{purpose.upper()}_PORT", "6379"))
-                        redis_db = int(os.getenv(f"REDIS_{purpose.upper()}_DB", "0" if purpose == "cache" else "1"))
+    # ─── RabbitMQ ───────────────────────────────────────────────────────
+    async def get_rabbitmq(self, tenant_id: int) -> aio_pika.RobustConnection:
+        async with self._lock:
+            if tenant_id not in self._rabbitmq_connections:
+                config = await get_tenant_config(tenant_id)
+                mq = config["infrastructure"].get("message_queue")
+                if not mq or mq["service_type"] != "rabbitmq":
+                    raise ValueError("RabbitMQ not configured")
+                conn = await aio_pika.connect_robust(
+                    f"amqp://{mq['username']}:{mq['password']}@{mq['host']}:{mq['port']}/%2F"
+                )
+                self._rabbitmq_connections[tenant_id] = conn
+            return self._rabbitmq_connections[tenant_id]
 
-                        config = type('Config', (), {
-                            'host': redis_host,
-                            'port': redis_port,
-                            'database_name': str(redis_db),
-                            'username': os.getenv(f"REDIS_{purpose.upper()}_USERNAME", ""),
-                            'password': os.getenv(f"REDIS_{purpose.upper()}_PASSWORD", "")
-                        })()
+    # ─── Kafka Producer ─────────────────────────────────────────────────
+    async def get_kafka_producer(self, tenant_id: int) -> aiokafka.AIOKafkaProducer:
+        async with self._lock:
+            if tenant_id not in self._kafka_producers:
+                config = await get_tenant_config(tenant_id)
+                kafka = config["infrastructure"].get("message_queue")
+                if not kafka or kafka["service_type"] != "kafka":
+                    raise ValueError("Kafka not configured")
+                producer = aiokafka.AIOKafkaProducer(
+                    bootstrap_servers=f"{kafka['host']}:{kafka['port']}"
+                )
+                await producer.start()
+                self._kafka_producers[tenant_id] = producer
+            return self._kafka_producers[tenant_id]
 
-                    # Create Redis connection
-                    redis_client = redis.Redis(
-                        host=config.host,
-                        port=config.port,
-                        db=int(config.database_name) if config.database_name else 0,
-                        username=config.username if config.username else None,
-                        password=config.password if config.password else None,
-                        decode_responses=True,
-                        socket_connect_timeout=5,
-                        socket_timeout=5,
-                        retry_on_timeout=True
-                    )
-
-                    # Test connection
-                    await redis_client.ping()
-
-                    self._redis_pools[cache_key] = redis_client
-                    logger.info(f"Redis client created for tenant {tenant_id}, purpose {purpose}")
-                    return redis_client
-
-            except Exception as e:
-                logger.error(f"Failed to create Redis client for tenant {tenant_id}, purpose {purpose}: {e}")
-                raise
-
-    async def get_db_session(self, tenant_id: int = None) -> AsyncSession:
-        """
-        Get database session for the specified tenant
-        If no tenant_id provided, uses the default database
-        """
+    # ─── Per-tenant DB Session ──────────────────────────────────────────
+    @asynccontextmanager
+    async def get_db_session(self, tenant_id: Optional[int] = None) -> AsyncGenerator[AsyncSession, None]:
         if not tenant_id:
-            # Return default session
-            return async_session()
+            async with async_session() as session:
+                yield session
+            return
 
-        cache_key = f"db_{tenant_id}"
-
-        async with self._cache_lock:
-            if cache_key in self._session_makers:
-                session_maker = self._session_makers[cache_key]
-                return session_maker()
-
-            try:
-                # Get database configuration from infrastructure_settings
-                async with async_session() as db:
-                    result = await db.execute(
-                        "SELECT host, port, username, password, database_name, connection_string "
-                        "FROM infrastructure_settings "
-                        "WHERE tenant_id = :tid AND service_type = 'postgresql' AND service_name = 'main_database'",
-                        {"tid": tenant_id}
+        async with self._lock:
+            if tenant_id not in self._session_makers:
+                config = await get_tenant_config(tenant_id)
+                db_cfg = config["infrastructure"].get("main_database")
+                if not db_cfg:
+                    session_maker = async_session
+                else:
+                    url = db_cfg.get("connection_string") or URL.create(
+                        "postgresql+asyncpg",
+                        username=db_cfg.get("username"),
+                        password=db_cfg.get("password"),
+                        host=db_cfg["host"],
+                        port=db_cfg.get("port", 5432),
+                        database=db_cfg["database_name"],
                     )
-                    config = result.fetchone()
+                    engine = create_async_engine(url, pool_size=20, max_overflow=10)
+                    session_maker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+                    self._db_engines[tenant_id] = engine
+                self._session_makers[tenant_id] = session_maker
 
-                    if not config:
-                        # Fallback to default database
-                        return async_session()
+            async with self._session_makers[tenant_id]() as session:
+                yield session
 
-                    # Build connection URL
-                    if config.connection_string:
-                        db_url = config.connection_string
-                    else:
-                        db_url = URL.create(
-                            drivername="postgresql+asyncpg",
-                            username=config.username,
-                            password=config.password,
-                            host=config.host,
-                            port=config.port,
-                            database=config.database_name
-                        )
+    # ─── Shutdown ───────────────────────────────────────────────────────
+    async def close_all(self):
+        # Redis
+        for pool in self._redis_pools.values():
+            await pool.disconnect()
+        self._redis_pools.clear()
 
-                    # Create async engine
-                    engine = create_async_engine(
-                        db_url,
-                        pool_size=getattr(config, 'max_connections', 20),
-                        max_overflow=30,
-                        pool_pre_ping=True,
-                        echo=False
-                    )
+        # RabbitMQ
+        for conn in self._rabbitmq_connections.values():
+            await conn.close()
+        self._rabbitmq_connections.clear()
 
-                    # Create session maker
-                    session_maker = async_sessionmaker(
-                        engine,
-                        class_=AsyncSession,
-                        expire_on_commit=False
-                    )
+        # Kafka
+        for producer in self._kafka_producers.values():
+            await producer.stop()
+        self._kafka_producers.clear()
 
-                    self._session_makers[cache_key] = session_maker
-                    self._db_engines[cache_key] = engine
+        # DB
+        for engine in self._db_engines.values():
+            await engine.dispose()
+        self._db_engines.clear()
+        self._session_makers.clear()
 
-                    logger.info(f"Database session maker created for tenant {tenant_id}")
-                    return session_maker()
-
-            except Exception as e:
-                logger.error(f"Failed to create database session for tenant {tenant_id}: {e}")
-                # Fallback to default session
-                return async_session()
-
-    async def close_connections(self):
-        """Close all connections"""
-        try:
-            # Close Redis connections
-            for redis_client in self._redis_pools.values():
-                await redis_client.close()
-            self._redis_pools.clear()
-
-            # Close database engines
-            for engine in self._db_engines.values():
-                await engine.dispose()
-            self._db_engines.clear()
-            self._session_makers.clear()
-
-            logger.info("All infrastructure connections closed")
-        except Exception as e:
-            logger.error(f"Error closing infrastructure connections: {e}")
+        logger.info("All infrastructure connections closed")
 
 
-# Global instance
+# Global instance — your way
 infra_service = InfrastructureService()

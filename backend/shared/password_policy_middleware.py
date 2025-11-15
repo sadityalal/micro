@@ -1,11 +1,10 @@
-# backend/shared/password_policy.py
 import re
 import string
-from typing import Dict, Any, Set
+from typing import Dict, Any, Set, List
 from fastapi import HTTPException, status
 import asyncio
 from pathlib import Path
-from ..logger import get_logger
+from .logger_middleware import get_logger
 from .infrastructure_service import infra_service
 
 logger = get_logger(__name__)
@@ -14,8 +13,6 @@ logger = get_logger(__name__)
 class PasswordPolicy:
     def __init__(self):
         self.common_passwords = self._load_common_passwords()
-
-        # Enhanced pre-compiled regex patterns
         self.sequential_pattern = re.compile(
             r"(abc|bcd|cde|def|efg|fgh|ghi|hij|ijk|jkl|klm|lmn|mno|nop|opq|pqr|qrs|rst|stu|tuv|uvw|vwx|wxy|xyz|"
             r"123|234|345|456|567|678|789|890|987|876|765|654|543|432|321)",
@@ -26,23 +23,18 @@ class PasswordPolicy:
             r"1qaz|2wsx|3edc|4rfv|5tgb|6yhn|7ujm|8ik,|9ol.)",
             re.IGNORECASE
         )
-        self.repeated_pattern = re.compile(r"(.)\1\1+")  # 3+ repeated chars
-        self.unicode_special_chars = re.compile(r"[^\w\s]", re.UNICODE)  # Unicode-aware
-
-        # Load common dictionary words
+        self.repeated_pattern = re.compile(r"(.)\1\1+")
+        self.unicode_special_chars = re.compile(r"[^\w\s]", re.UNICODE)
         self.common_words = self._load_common_words()
 
     def _load_common_passwords(self) -> Set[str]:
-        """Load common passwords from file or use defaults"""
         try:
-            # Try to load from external file for easy updates
             pass_file = Path("/etc/security/common_passwords.txt")
             if pass_file.exists():
                 return set(pass_file.read_text().splitlines())
         except:
             pass
 
-        # Fallback to comprehensive list
         return {
             "password", "123456", "123456789", "12345678", "12345", "1234567",
             "qwerty", "abc123", "password1", "admin", "welcome", "login",
@@ -52,8 +44,6 @@ class PasswordPolicy:
         }
 
     def _load_common_words(self) -> Set[str]:
-        """Load common dictionary words for additional checks"""
-        # In production, load from a proper dictionary file
         return {
             "password", "admin", "welcome", "qwerty", "dragon", "master",
             "sunshine", "princess", "football", "baseball", "monkey"
@@ -61,12 +51,10 @@ class PasswordPolicy:
 
     async def validate_password(self, password: str, tenant_id: int, user_context: Dict[str, Any] = None) -> Dict[
         str, Any]:
-        """Enhanced validation with user context awareness"""
         if not password or len(password.strip()) == 0:
             return {"valid": False, "errors": ["Password cannot be empty"], "score": 0}
 
-        # Basic sanity checks
-        if len(password) > 256:  # Prevent extremely long passwords
+        if len(password) > 256:
             return {"valid": False, "errors": ["Password is too long"], "score": 0}
 
         try:
@@ -76,24 +64,20 @@ class PasswordPolicy:
                     {"tid": tenant_id}
                 )
                 policy = result.fetchone()
-
                 if not policy:
                     return self._validate_with_defaults(password, user_context)
-
                 return self._validate_with_policy(password, policy, user_context)
-
         except Exception as e:
             logger.error(f"Password policy DB error for tenant {tenant_id}: {e}")
             return self._validate_with_defaults(password, user_context)
 
     def _validate_with_policy(self, password: str, policy: Any, user_context: Dict[str, Any] = None) -> Dict[str, Any]:
         errors = []
-
         min_length = getattr(policy, "min_password_length", 8) or 8
+
         if len(password) < min_length:
             errors.append(f"Password must be at least {min_length} characters")
 
-        # Character requirements
         if getattr(policy, "require_uppercase", True) and not re.search(r"[A-Z]", password):
             errors.append("Password must contain at least one uppercase letter")
 
@@ -103,21 +87,17 @@ class PasswordPolicy:
         if getattr(policy, "require_numbers", True) and not re.search(r"\d", password):
             errors.append("Password must contain at least one number")
 
-        # Enhanced special character check (Unicode-aware)
         if getattr(policy, "require_special_chars", True):
             if not self.unicode_special_chars.search(password):
                 errors.append("Password must contain at least one special character")
 
-        # Security checks
         lower_pass = password.lower()
         if lower_pass in self.common_passwords:
             errors.append("This password is too common and easily guessed")
 
-        # Dictionary word check
         if any(word in lower_pass for word in self.common_words if len(word) > 4):
             errors.append("Password contains common dictionary words")
 
-        # Pattern checks
         if self.sequential_pattern.search(lower_pass):
             errors.append("Password contains sequential characters (e.g., abc, 123)")
 
@@ -127,7 +107,6 @@ class PasswordPolicy:
         if self.repeated_pattern.search(password):
             errors.append("Password contains repeated characters (e.g., aaa, 111)")
 
-        # Context-aware validation
         if user_context:
             context_errors = self._check_context_violations(password, user_context)
             errors.extend(context_errors)
@@ -152,7 +131,6 @@ class PasswordPolicy:
         if password.lower() in self.common_passwords:
             errors.append("This password is too common")
 
-        # Context checks for default policy too
         if user_context:
             context_errors = self._check_context_violations(password, user_context)
             errors.extend(context_errors)
@@ -165,11 +143,9 @@ class PasswordPolicy:
         }
 
     def _check_context_violations(self, password: str, user_context: Dict[str, Any]) -> List[str]:
-        """Check password against user's personal information"""
         errors = []
         lower_pass = password.lower()
 
-        # Check against user's name, email, etc.
         if user_context.get('email'):
             email_local = user_context['email'].split('@')[0].lower()
             if email_local in lower_pass and len(email_local) > 3:
@@ -192,16 +168,12 @@ class PasswordPolicy:
         length = len(password)
         unique_chars = len(set(password))
 
-        # Length scoring (capped at 40)
         score += min(length * 4, 40)
-
-        # Character variety
         score += 12 if re.search(r"[A-Z]", password) else 0
         score += 12 if re.search(r"[a-z]", password) else 0
         score += 15 if re.search(r"\d", password) else 0
         score += 20 if self.unicode_special_chars.search(password) else 0
 
-        # Bonus for entropy
         if unique_chars >= 12:
             score += 10
         if length >= 16:
@@ -209,7 +181,6 @@ class PasswordPolicy:
         if length >= 20:
             score += 10
 
-        # Deductions for weaknesses
         lower_pass = password.lower()
         if lower_pass in self.common_passwords:
             score = 0
@@ -238,5 +209,4 @@ class PasswordPolicy:
             return "very_weak"
 
 
-# Global instance
 password_policy = PasswordPolicy()
