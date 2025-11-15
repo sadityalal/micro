@@ -5,6 +5,7 @@ python-jose[cryptography]==3.5.0
 redis==7.0.0
 python-dotenv==1.1.1
 pydantic==2.12.3
+pydantic-settings==2.12.0  # ← ADD THIS
 anyio==4.11.0
 starlette==0.48.0
 sniffio==1.3.1
