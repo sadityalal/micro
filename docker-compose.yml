@@ -1,0 +1,27 @@
+services:
+  postgres:
+    image: postgres:17
+    container_name: pavitra_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: pavitra_db
+      POSTGRES_USER: root
+      POSTGRES_PASSWORD: root123
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-scripts:/docker-entrypoint-initdb.d
+    env_file:
+      - .env
+    networks:
+      - private-net
+
+volumes:
+  postgres_data:
+    driver: local
+
+networks:
+  private-net:
+    driver: bridge
