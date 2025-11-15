@@ -1,25 +1,13 @@
-# backend/shared/auth_middleware.py
-"""
-FINAL AUTH MIDDLEWARE — NOVEMBER 15, 2025
-Works with:
-- infra_service.get_redis_client()
-- infra_service.get_db_session()
-- Your config.py
-- Your models
-"""
-
 import time
 from typing import Optional, Dict, Any
 from fastapi import Request, HTTPException, status, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from jose import JWTError, jwt
 import asyncio
-
 from .infrastructure_service import infra_service
 from .logger_middleware import get_logger
 
 logger = get_logger(__name__)
-
 bearer_scheme = HTTPBearer(auto_error=False)
 
 _jwt_secret_cache: Dict[int, tuple[str, float]] = {}
@@ -43,11 +31,10 @@ async def get_jwt_secret(tenant_id: int) -> Optional[str]:
             row = result.fetchone()
             if row and row.jwt_secret_key:
                 async with _cache_lock:
-                    _jwt_secret_cache[tenant_id] = (row.jwt_secret_key, now + 300)  # 5 min cache
+                    _jwt_secret_cache[tenant_id] = (row.jwt_secret_key, now + 300)
                 return row.jwt_secret_key
     except Exception as e:
         logger.error(f"Failed to fetch JWT secret for tenant {tenant_id}: {e}")
-
     return None
 
 
@@ -60,9 +47,9 @@ class AuthMiddleware:
         }
 
     async def __call__(
-        self,
-        request: Request,
-        credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
+            self,
+            request: Request,
+            credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
     ):
         if self._is_public_route(request):
             return
@@ -70,11 +57,9 @@ class AuthMiddleware:
         tenant_id = getattr(request.state, "tenant_id", 1)
         user = None
 
-        # 1. Try JWT
         if credentials and credentials.scheme.lower() == "bearer":
             user = await self._validate_jwt(credentials.credentials, tenant_id, request)
 
-        # 2. Try Session
         if not user:
             session = getattr(request.state, "session", None)
             if session and session.get("user_id"):
@@ -135,29 +120,20 @@ class AuthMiddleware:
         user_id = session.get("user_id")
         if not user_id:
             return None
-
         try:
             async with infra_service.get_db_session(tenant_id) as db:
+                # FIXED QUERY
                 result = await db.execute(
-                    """
-                    SELECT u.id, u.email, u.first_name, u.last_name, u.is_active
-                    FROM users u
-                    WHERE u.id = :uid AND u.tenant_id = :tid
-                    """,
-                    {"uid": user_id, "tid": tenant_id}
+                    "SELECT id, email, first_name, last_name FROM users WHERE id = :uid",
+                    {"uid": user_id}
                 )
                 user_row = result.fetchone()
-                if not user_row or not user_row.is_active:
+                if not user_row:
                     return None
 
-                # Fetch roles + permissions
+                # FIXED QUERY
                 roles_result = await db.execute(
-                    """
-                    SELECT r.name 
-                    FROM user_roles r
-                    JOIN user_role_assignments ura ON r.id = ura.role_id
-                    WHERE ura.user_id = :uid
-                    """,
+                    "SELECT r.name FROM user_roles r JOIN user_role_assignments ura ON r.id = ura.role_id WHERE ura.user_id = :uid",
                     {"uid": user_id}
                 )
                 roles = [row.name for row in roles_result.fetchall()]
@@ -168,7 +144,7 @@ class AuthMiddleware:
                     "first_name": user_row.first_name,
                     "last_name": user_row.last_name,
                     "roles": [{"name": r} for r in roles],
-                    "permissions": [],  # will be filled by role middleware if needed
+                    "permissions": [],
                     "auth_type": "session"
                 }
         except Exception as e:
@@ -183,5 +159,4 @@ class AuthMiddleware:
             return False
 
 
-# Global instance
 auth_middleware = AuthMiddleware()

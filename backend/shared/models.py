@@ -1,10 +1,3 @@
-# backend/shared/models.py
-"""
-SQLAlchemy models — 1:1 mapping with 01-init.sql
-100% matches your PostgreSQL schema
-Zero drift. Zero surprise.
-"""
-
 from sqlalchemy import (
     Column, Integer, String, Boolean, DateTime, Enum, Text,
     ForeignKey, JSONB, Index, UniqueConstraint
@@ -13,13 +6,9 @@ from sqlalchemy.sql import func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
 import enum
-
 from .database import Base
 
 
-# =============================================================================
-# Enums — must match PostgreSQL enums exactly
-# =============================================================================
 class RateLimitStrategy(enum.Enum):
     FIXED_WINDOW = "fixed_window"
     SLIDING_WINDOW = "sliding_window"
@@ -43,9 +32,6 @@ class ServiceStatus(enum.Enum):
     DISABLED = "disabled"
 
 
-# =============================================================================
-# Core Tenant Settings Models
-# =============================================================================
 class RateLimitSettings(Base):
     __tablename__ = "rate_limit_settings"
     __table_args__ = (
@@ -101,8 +87,8 @@ class InfrastructureSettings(Base):
 
     id = Column(Integer, primary_key=True)
     tenant_id = Column(Integer, nullable=False)
-    service_name = Column(String(100), nullable=False)  # e.g., cache_redis, session_redis, message_queue
-    service_type = Column(String(50), nullable=False)   # redis, rabbitmq, kafka, postgresql
+    service_name = Column(String(100), nullable=False)
+    service_type = Column(String(50), nullable=False)
     host = Column(String(255), nullable=False)
     port = Column(Integer)
     username = Column(String(255))

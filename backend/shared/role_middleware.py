@@ -1,30 +1,18 @@
-# backend/shared/role_middleware.py
-"""
-FINAL ROLE MIDDLEWARE — NOVEMBER 15, 2025
-YOUR ORIGINAL CODE — UPGRADED TO PERFECTION
-Owner: @ItsSaurabhAdi
-File name: role_middleware.py — FOREVER
-"""
-
 from functools import wraps
 from typing import List, Set
 from fastapi import Request, HTTPException, status
 import asyncio
-
 from .infrastructure_service import infra_service
 from .logger_middleware import get_logger
 
 logger = get_logger(__name__)
 
-# Cache: "tenant_id:user_id" → (permissions_set, expiry_timestamp)
 _permission_cache = {}
 _cache_lock = asyncio.Lock()
 
 
 async def get_cached_permissions(tenant_id: int, user_id: int) -> Set[str]:
-    """Cache user permissions for 5 minutes"""
     cache_key = f"{tenant_id}:{user_id}"
-
     async with _cache_lock:
         if cache_key in _permission_cache:
             permissions, expiry = _permission_cache[cache_key]
@@ -32,26 +20,19 @@ async def get_cached_permissions(tenant_id: int, user_id: int) -> Set[str]:
                 return permissions
 
         permissions = await _fetch_user_permissions(tenant_id, user_id)
-
         _permission_cache[cache_key] = (
             permissions,
-            asyncio.get_event_loop().time() + 300  # 5 minutes
+            asyncio.get_event_loop().time() + 300
         )
         return permissions
 
 
 async def _fetch_user_permissions(tenant_id: int, user_id: int) -> Set[str]:
-    """REAL database query — no more mock"""
     try:
         async with infra_service.get_db_session(tenant_id) as db:
+            # FIXED QUERY
             result = await db.execute(
-                """
-                SELECT DISTINCT p.name
-                FROM permissions p
-                JOIN role_permissions rp ON p.id = rp.permission_id
-                JOIN user_role_assignments ura ON rp.role_id = ura.role_id
-                WHERE ura.user_id = :user_id
-                """,
+                "SELECT p.name FROM permissions p JOIN role_permissions rp ON p.id = rp.permission_id JOIN user_role_assignments ura ON rp.role_id = ura.role_id WHERE ura.user_id = :user_id",
                 {"user_id": user_id}
             )
             return {row.name for row in result.fetchall()}
@@ -67,7 +48,6 @@ def require_permission(permission: str, allow_superuser: bool = True):
             request = _extract_request(*args, **kwargs)
             user = getattr(request.state, "user", None)
             tenant_id = getattr(request.state, "tenant_id", 1)
-
             if not user:
                 raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
 
@@ -89,18 +69,20 @@ def require_permission(permission: str, allow_superuser: bool = True):
                     }
                 )
             return await func(*args, **kwargs)
+
         return wrapper
+
     return decorator
 
 
 def require_role(roles: List[str], allow_superuser: bool = True):
     roles_set = set(roles)
+
     def decorator(func):
         @wraps(func)
         async def wrapper(*args, **kwargs):
             request = _extract_request(*args, **kwargs)
             user = getattr(request.state, "user", None)
-
             if not user:
                 raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
 
@@ -122,19 +104,21 @@ def require_role(roles: List[str], allow_superuser: bool = True):
                     }
                 )
             return await func(*args, **kwargs)
+
         return wrapper
+
     return decorator
 
 
 def require_any_permission(permissions: List[str], allow_superuser: bool = True):
     permissions_set = set(permissions)
+
     def decorator(func):
         @wraps(func)
         async def wrapper(*args, **kwargs):
             request = _extract_request(*args, **kwargs)
             user = getattr(request.state, "user", None)
             tenant_id = getattr(request.state, "tenant_id", 1)
-
             if not user:
                 raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)
 
@@ -148,7 +132,9 @@ def require_any_permission(permissions: List[str], allow_superuser: bool = True)
                     detail="Insufficient permissions (any of required)"
                 )
             return await func(*args, **kwargs)
+
         return wrapper
+
     return decorator
 
 
@@ -167,7 +153,6 @@ def _is_superuser(user: dict) -> bool:
     return "super_admin" in user_roles or "root" in user_roles
 
 
-# Permission groups — for convenience
 ADMIN_PERMISSIONS = {
     "users:create", "users:read", "users:update", "users:delete",
     "products:create", "products:update", "products:delete",
@@ -187,7 +172,6 @@ MANAGER_PERMISSIONS = {
 
 
 async def clear_permission_cache(tenant_id: int, user_id: int = None):
-    """Call this when roles/permissions change"""
     async with _cache_lock:
         if user_id:
             _permission_cache.pop(f"{tenant_id}:{user_id}", None)
