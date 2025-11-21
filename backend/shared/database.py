@@ -8,7 +8,6 @@ Zero hardcoded values. Everything driven from DB + .env + system_settings table.
 import os
 import ssl
 from typing import AsyncGenerator, Dict
-
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     create_async_engine,
@@ -18,7 +17,6 @@ from sqlalchemy.ext.asyncio import (
 from sqlalchemy.orm import declarative_base
 from sqlalchemy import event, text
 from sqlalchemy.exc import SQLAlchemyError
-
 from .config import settings
 from .logger_middleware import get_logger
 
@@ -30,7 +28,6 @@ logger = get_logger(__name__)
 def _create_ssl_context() -> ssl.SSLContext | bool:
     if not settings.database.ssl_enabled:
         return False
-
     ctx = ssl.create_default_context()
     if settings.app.environment == "production":
         ctx.check_hostname = True
@@ -69,7 +66,6 @@ engine: AsyncEngine = create_async_engine(
     connect_args=connect_args,
 )
 
-# Session factory
 async_session = async_sessionmaker(
     bind=engine,
     class_=AsyncSession,
@@ -77,7 +73,6 @@ async_session = async_sessionmaker(
     autoflush=False,
 )
 
-# Base for all models
 Base = declarative_base()
 
 
@@ -86,12 +81,10 @@ Base = declarative_base()
 # =============================================================================
 @event.listens_for(engine.sync_engine, "connect")
 def on_connect(dbapi_connection, connection_record):
-    """Set session-level defaults on every new connection"""
     cursor = dbapi_connection.cursor()
     cursor.execute("SET search_path TO public")
     cursor.execute("SET client_min_messages TO warning")
     cursor.execute("SET statement_timeout = 30000")
-    # Future: SET ROLE tenant_123;  ← for row-level security
     cursor.close()
 
 
@@ -123,19 +116,15 @@ async def init_db() -> None:
         async with engine.begin() as conn:
             await conn.execute(text("SELECT 1"))
             logger.info("Database connection successful")
-
-            # Auto-migrate only if explicitly allowed
             auto_migrate = (
                 settings.app.environment != "production" or
                 os.getenv("AUTO_MIGRATIONS", "false").lower() == "true"
             )
-
             if auto_migrate:
                 await conn.run_sync(Base.metadata.create_all)
                 logger.info("Tables created/verified via create_all()")
             else:
                 logger.info("AUTO_MIGRATIONS disabled — skipping table creation")
-
     except Exception as e:
         logger.critical(f"Failed to initialize database: {e}", exc_info=True)
         raise
@@ -163,7 +152,6 @@ async def check_db_health() -> bool:
     except Exception as e:
         logger.error(f"DB health check failed: {e}")
         return False
-
 
 async def get_db_metrics() -> Dict[str, int]:
     pool = engine.pool

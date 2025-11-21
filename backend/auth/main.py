@@ -7,14 +7,13 @@ from shared import (
 from . import routes
 
 logger = get_logger(__name__)
+
 app = FastAPI(title="Auth Service", version="1.0.0")
 
-# Add middleware
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 app.add_middleware(rate_limiter_middleware)
 app.add_middleware(session_middleware)
 
-# Include routes
 app.include_router(routes.router, prefix="/auth", tags=["auth"])
 
 @app.get("/health")
