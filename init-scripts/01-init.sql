@@ -1,9 +1,8 @@
 -- =====================================================
--- COMPLETE init.sql – PostgreSQL 17 FULLY WORKING
+-- COMPLETE init.sql - PostgreSQL 17 - FULLY WORKING
 -- Multi-Tenant E-Commerce + SaaS Platform Database Schema
--- Fixed Version: All original content preserved, errors resolved
--- Date: November 15, 2025
--- Author: Original by @ItsSaurabhAdi, Fixed by Grok
+-- Date: November 2024
+-- Author: @ItsSaurabhAdi
 -- =====================================================
 
 -- Enable useful extensions
@@ -12,9 +11,8 @@ CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 CREATE EXTENSION IF NOT EXISTS "btree_gist";
 
 -- =====================================================
--- ENUMERATIONS
+-- ENUMERATIONS (CREATE FIRST)
 -- =====================================================
--- Enumerations
 CREATE TYPE tenant_status AS ENUM ('active', 'suspended', 'inactive');
 CREATE TYPE order_status AS ENUM ('pending', 'confirmed', 'processing', 'shipped', 'delivered', 'cancelled', 'refunded');
 CREATE TYPE payment_status AS ENUM ('pending', 'processing', 'completed', 'failed', 'refunded', 'cancelled');
@@ -31,7 +29,6 @@ CREATE TYPE payment_method_type AS ENUM ('bank', 'upi', 'wallet', 'card', 'net_b
 CREATE TYPE payment_gateway AS ENUM ('razorpay', 'stripe', 'paypal', 'paytm', 'phonepe', 'google_pay', 'instamojo', 'ccavenue', 'custom');
 CREATE TYPE bank_status AS ENUM ('active', 'inactive', 'maintenance');
 CREATE TYPE upi_type AS ENUM ('public', 'private');
--- Enhanced security and configuration tables
 CREATE TYPE password_policy_type AS ENUM ('basic', 'medium', 'strong', 'custom');
 CREATE TYPE username_policy_type AS ENUM ('email', 'any', 'custom');
 CREATE TYPE rate_limit_strategy AS ENUM ('fixed_window', 'sliding_window', 'token_bucket');
@@ -41,26 +38,25 @@ CREATE TYPE service_status AS ENUM ('active', 'maintenance', 'disabled');
 CREATE TYPE database_type AS ENUM ('postgresql', 'mysql', 'mongodb');
 CREATE TYPE cache_type AS ENUM ('redis', 'memcached', 'local');
 CREATE TYPE queue_type AS ENUM ('rabbitmq', 'redis', 'sqs', 'kafka');
-
--- FIXED: Missing enums used in tables
 CREATE TYPE card_network AS ENUM ('visa', 'mastercard', 'rupay', 'amex', 'diners', 'discover', 'jcb');
 CREATE TYPE card_type AS ENUM ('credit', 'debit', 'prepaid');
 
 -- =====================================================
--- CORE TABLES (Reordered for dependency resolution)
+-- CORE TABLES (PROPER ORDER FOR DEPENDENCIES)
 -- =====================================================
 
--- Internationalization & Regions (must come first for FKs)
+-- 1. Countries first (no dependencies)
 CREATE TABLE countries (
     id BIGSERIAL PRIMARY KEY,
     name VARCHAR(100) NOT NULL UNIQUE,
-    code VARCHAR(3) NOT NULL UNIQUE, -- ISO country code
+    code VARCHAR(3) NOT NULL UNIQUE,
     currency_code VARCHAR(3) NOT NULL,
     is_active BOOLEAN DEFAULT TRUE,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+-- 2. Regions (depends on countries)
 CREATE TABLE regions (
     id BIGSERIAL PRIMARY KEY,
     country_id BIGINT NOT NULL REFERENCES countries(id) ON DELETE CASCADE,
@@ -71,7 +67,7 @@ CREATE TABLE regions (
     UNIQUE(country_id, code)
 );
 
--- Multi-Tenant Management
+-- 3. Tenants (depends on countries)
 CREATE TABLE tenants (
     id BIGSERIAL PRIMARY KEY,
     name VARCHAR(255) NOT NULL,
@@ -86,10 +82,10 @@ CREATE TABLE tenants (
     status tenant_status DEFAULT 'active'
 );
 
--- Core User & Roles
+-- 4. Users (depends on tenants)
 CREATE TABLE users (
     id BIGSERIAL PRIMARY KEY,
-    tenant_id BIGINT,
+    tenant_id BIGINT REFERENCES tenants(id) ON DELETE SET NULL,
     first_name VARCHAR(100) NOT NULL,
     last_name VARCHAR(100) NOT NULL,
     email VARCHAR(255) NOT NULL UNIQUE,
@@ -102,10 +98,7 @@ CREATE TABLE users (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- FIXED: Add FK after tenants table exists
-ALTER TABLE users ADD CONSTRAINT fk_users_tenant
-    FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE SET NULL;
-
+-- 5. User Roles (independent)
 CREATE TABLE user_roles (
     id BIGSERIAL PRIMARY KEY,
     name VARCHAR(50) NOT NULL UNIQUE,
@@ -114,6 +107,7 @@ CREATE TABLE user_roles (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+-- 6. Permissions (independent)
 CREATE TABLE permissions (
     id BIGSERIAL PRIMARY KEY,
     name VARCHAR(100) NOT NULL UNIQUE,
@@ -122,6 +116,7 @@ CREATE TABLE permissions (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+-- 7. Role Permissions (depends on roles and permissions)
 CREATE TABLE role_permissions (
     id BIGSERIAL PRIMARY KEY,
     role_id BIGINT NOT NULL REFERENCES user_roles(id) ON DELETE CASCADE,
@@ -130,6 +125,7 @@ CREATE TABLE role_permissions (
     UNIQUE(role_id, permission_id)
 );
 
+-- 8. User Role Assignments (depends on users and roles)
 CREATE TABLE user_role_assignments (
     id BIGSERIAL PRIMARY KEY,
     user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -139,6 +135,7 @@ CREATE TABLE user_role_assignments (
     UNIQUE(user_id, role_id)
 );
 
+-- 9. Tenant Users (depends on tenants and users)
 CREATE TABLE tenant_users (
     id BIGSERIAL PRIMARY KEY,
     tenant_id BIGINT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
@@ -148,7 +145,10 @@ CREATE TABLE tenant_users (
     UNIQUE(tenant_id, user_id)
 );
 
--- Settings
+-- =====================================================
+-- SETTINGS TABLES (ALL DEPEND ON TENANTS)
+-- =====================================================
+
 CREATE TABLE tenant_system_settings (
     id BIGSERIAL PRIMARY KEY,
     tenant_id BIGINT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
@@ -225,19 +225,147 @@ CREATE TABLE site_settings (
     UNIQUE(tenant_id, setting_key)
 );
 
--- Enhanced Tax System
+-- =====================================================
+-- SECURITY & CONFIGURATION TABLES
+-- =====================================================
+
+CREATE TABLE security_settings (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    jwt_secret_key VARCHAR(255) NOT NULL,
+    jwt_algorithm VARCHAR(20) DEFAULT 'HS256',
+    access_token_expiry_minutes INTEGER DEFAULT 30,
+    refresh_token_expiry_days INTEGER DEFAULT 7,
+    password_reset_expiry_minutes INTEGER DEFAULT 30,
+    max_login_attempts INTEGER DEFAULT 5,
+    account_lockout_minutes INTEGER DEFAULT 30,
+    require_https BOOLEAN DEFAULT TRUE,
+    cors_origins JSONB DEFAULT '["http://localhost:3000"]',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(tenant_id)
+);
+
+CREATE TABLE login_settings (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    password_policy password_policy_type DEFAULT 'medium',
+    min_password_length INTEGER DEFAULT 8,
+    require_uppercase BOOLEAN DEFAULT TRUE,
+    require_lowercase BOOLEAN DEFAULT TRUE,
+    require_numbers BOOLEAN DEFAULT TRUE,
+    require_special_chars BOOLEAN DEFAULT TRUE,
+    max_password_age_days INTEGER DEFAULT 90,
+    password_history_count INTEGER DEFAULT 5,
+    max_login_attempts INTEGER DEFAULT 5,
+    lockout_duration_minutes INTEGER DEFAULT 30,
+    username_policy username_policy_type DEFAULT 'email',
+    session_timeout_minutes INTEGER DEFAULT 30,
+    mfa_required BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(tenant_id)
+);
+
+CREATE TABLE session_settings (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    storage_type session_storage_type DEFAULT 'redis',
+    timeout_type session_timeout_type DEFAULT 'sliding',
+    session_timeout_minutes INTEGER DEFAULT 30,
+    absolute_timeout_minutes INTEGER DEFAULT 480,
+    sliding_timeout_minutes INTEGER DEFAULT 30,
+    max_concurrent_sessions INTEGER DEFAULT 5,
+    regenerate_session BOOLEAN DEFAULT TRUE,
+    secure_cookies BOOLEAN DEFAULT TRUE,
+    http_only_cookies BOOLEAN DEFAULT TRUE,
+    same_site_policy VARCHAR(20) DEFAULT 'lax',
+    cookie_domain VARCHAR(255),
+    cookie_path VARCHAR(100) DEFAULT '/',
+    enable_session_cleanup BOOLEAN DEFAULT TRUE,
+    cleanup_interval_minutes INTEGER DEFAULT 60,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(tenant_id)
+);
+
+CREATE TABLE rate_limit_settings (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    strategy rate_limit_strategy DEFAULT 'fixed_window',
+    requests_per_minute INTEGER DEFAULT 60,
+    requests_per_hour INTEGER DEFAULT 1000,
+    requests_per_day INTEGER DEFAULT 10000,
+    burst_capacity INTEGER DEFAULT 10,
+    enabled BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(tenant_id)
+);
+
+CREATE TABLE logging_settings (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    log_level VARCHAR(10) DEFAULT 'INFO',
+    enable_audit_log BOOLEAN DEFAULT TRUE,
+    enable_access_log BOOLEAN DEFAULT TRUE,
+    enable_security_log BOOLEAN DEFAULT TRUE,
+    retention_days INTEGER DEFAULT 30,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(tenant_id)
+);
+
+CREATE TABLE infrastructure_settings (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    service_name VARCHAR(100) NOT NULL,
+    service_type VARCHAR(50) NOT NULL,
+    host VARCHAR(255) NOT NULL,
+    port INTEGER,
+    username VARCHAR(255),
+    password VARCHAR(255),
+    database_name VARCHAR(100),
+    connection_string TEXT,
+    max_connections INTEGER DEFAULT 20,
+    timeout_seconds INTEGER DEFAULT 30,
+    status service_status DEFAULT 'active',
+    health_check_url VARCHAR(500),
+    metadata JSONB,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(tenant_id, service_name)
+);
+
+CREATE TABLE service_urls (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    service_name VARCHAR(100) NOT NULL,
+    base_url VARCHAR(500) NOT NULL,
+    health_endpoint VARCHAR(200),
+    api_version VARCHAR(20),
+    timeout_ms INTEGER DEFAULT 30000,
+    retry_attempts INTEGER DEFAULT 3,
+    circuit_breaker_enabled BOOLEAN DEFAULT TRUE,
+    status service_status DEFAULT 'active',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(tenant_id, service_name)
+);
+
+-- =====================================================
+-- E-COMMERCE TABLES
+-- =====================================================
+
 CREATE TABLE tax_categories (
     id BIGSERIAL PRIMARY KEY,
     tenant_id BIGINT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
     name VARCHAR(100) NOT NULL,
     description TEXT,
     tax_type tax_type NOT NULL,
-    -- For GST
     hsn_code VARCHAR(10),
     gst_slab gst_slab,
-    -- For VAT
     vat_rate vat_rate,
-    -- For custom tax
     custom_rate DECIMAL(5,2),
     is_active BOOLEAN DEFAULT TRUE,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -257,7 +385,6 @@ CREATE TABLE regional_tax_rates (
     UNIQUE(tax_category_id, country_id, region_id, effective_from)
 );
 
--- Catalog & Products
 CREATE TABLE categories (
     id BIGSERIAL PRIMARY KEY,
     tenant_id BIGINT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
@@ -290,7 +417,7 @@ CREATE TABLE products (
     category_id BIGINT REFERENCES categories(id),
     brand_id BIGINT REFERENCES brands(id),
     tax_category_id BIGINT REFERENCES tax_categories(id),
-    hsn_code VARCHAR(10), -- Specific HSN for product (overrides category)
+    hsn_code VARCHAR(10),
     weight DECIMAL(8,2),
     dimensions JSONB,
     is_active BOOLEAN DEFAULT TRUE,
@@ -329,7 +456,6 @@ CREATE TABLE reviews (
     UNIQUE(product_id, user_id)
 );
 
--- Orders & Payments
 CREATE TABLE orders (
     id BIGSERIAL PRIMARY KEY,
     tenant_id BIGINT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
@@ -356,7 +482,7 @@ CREATE TABLE order_items (
     unit_price DECIMAL(10,2) NOT NULL,
     tax_amount DECIMAL(10,2) DEFAULT 0,
     total_price DECIMAL(10,2) NOT NULL,
-    tax_details JSONB -- Stores detailed tax breakdown
+    tax_details JSONB
 );
 
 CREATE TABLE payments (
@@ -416,7 +542,10 @@ CREATE TABLE wishlists (
     UNIQUE(user_id, product_id)
 );
 
--- Notifications
+-- =====================================================
+-- NOTIFICATION & CONTENT TABLES
+-- =====================================================
+
 CREATE TABLE notification_logs (
     id BIGSERIAL PRIMARY KEY,
     tenant_id BIGINT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
@@ -438,7 +567,6 @@ CREATE TABLE user_notification_preferences (
     UNIQUE(user_id, notification_method)
 );
 
--- Content & CMS
 CREATE TABLE pages (
     id BIGSERIAL PRIMARY KEY,
     tenant_id BIGINT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
@@ -479,7 +607,10 @@ CREATE TABLE blogs (
     UNIQUE(tenant_id, slug)
 );
 
--- Logs & Analytics
+-- =====================================================
+-- LOGS & ANALYTICS TABLES
+-- =====================================================
+
 CREATE TABLE activity_logs (
     id BIGSERIAL PRIMARY KEY,
     user_id BIGINT REFERENCES users(id),
@@ -498,7 +629,6 @@ CREATE TABLE analytics_logs (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- Misc / Other
 CREATE TABLE sessions (
     id BIGSERIAL PRIMARY KEY,
     user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -533,7 +663,145 @@ CREATE TABLE files (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- History / Audit Tables
+-- =====================================================
+-- PAYMENT & BANKING TABLES
+-- =====================================================
+
+CREATE TABLE supported_banks (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    bank_name VARCHAR(100) NOT NULL,
+    bank_code VARCHAR(20) NOT NULL,
+    bank_logo_url TEXT,
+    country_code VARCHAR(3) NOT NULL REFERENCES countries(code) ON DELETE RESTRICT,
+    is_active BOOLEAN DEFAULT TRUE,
+    status bank_status DEFAULT 'active',
+    processing_fee DECIMAL(5,2) DEFAULT 0,
+    min_amount DECIMAL(10,2) DEFAULT 0,
+    max_amount DECIMAL(10,2) DEFAULT 100000,
+    supported_gateways payment_gateway[],
+    metadata JSONB,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(tenant_id, bank_code, country_code)
+);
+
+CREATE TABLE upi_support (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    upi_id VARCHAR(100) NOT NULL,
+    upi_name VARCHAR(100) NOT NULL,
+    upi_type upi_type DEFAULT 'public',
+    qr_code_url TEXT,
+    is_active BOOLEAN DEFAULT TRUE,
+    supported_apps VARCHAR(100)[],
+    max_amount_per_transaction DECIMAL(10,2) DEFAULT 100000,
+    max_transactions_per_day INTEGER DEFAULT 10,
+    processing_fee DECIMAL(5,2) DEFAULT 0,
+    metadata JSONB,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(tenant_id, upi_id)
+);
+
+CREATE TABLE wallet_support (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    wallet_name VARCHAR(100) NOT NULL,
+    wallet_code VARCHAR(50) NOT NULL,
+    wallet_logo_url TEXT,
+    is_active BOOLEAN DEFAULT TRUE,
+    country_code VARCHAR(3) NOT NULL REFERENCES countries(code) ON DELETE RESTRICT,
+    min_amount DECIMAL(10,2) DEFAULT 0,
+    max_amount DECIMAL(10,2) DEFAULT 50000,
+    processing_fee DECIMAL(5,2) DEFAULT 0,
+    supported_currencies VARCHAR(3)[],
+    metadata JSONB,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(tenant_id, wallet_code, country_code)
+);
+
+CREATE TABLE card_support (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    card_network card_network NOT NULL,
+    card_type card_type NOT NULL,
+    is_active BOOLEAN DEFAULT TRUE,
+    country_code VARCHAR(3) NOT NULL REFERENCES countries(code) ON DELETE RESTRICT,
+    processing_fee_percentage DECIMAL(5,2) DEFAULT 0,
+    processing_fee_fixed DECIMAL(10,2) DEFAULT 0,
+    min_amount DECIMAL(10,2) DEFAULT 0,
+    max_amount DECIMAL(10,2) DEFAULT 100000,
+    supported_gateways payment_gateway[],
+    metadata JSONB,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(tenant_id, card_network, card_type, country_code)
+);
+
+CREATE TABLE payment_gateway_config (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    gateway payment_gateway NOT NULL,
+    is_active BOOLEAN DEFAULT FALSE,
+    is_live BOOLEAN DEFAULT FALSE,
+    api_key VARCHAR(255),
+    api_secret VARCHAR(255),
+    webhook_secret VARCHAR(255),
+    merchant_id VARCHAR(100),
+    gateway_credentials JSONB,
+    supported_currencies VARCHAR(3)[] DEFAULT '{USD}',
+    supported_countries VARCHAR(3)[],
+    config_metadata JSONB,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(tenant_id, gateway)
+);
+
+CREATE TABLE tenant_bank_accounts (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    account_holder_name VARCHAR(255) NOT NULL,
+    account_number VARCHAR(50) NOT NULL,
+    bank_name VARCHAR(100) NOT NULL,
+    bank_code VARCHAR(20) NOT NULL,
+    branch_name VARCHAR(100),
+    branch_address TEXT,
+    account_type VARCHAR(20) CHECK (account_type IN ('savings', 'current', 'corporate')),
+    currency VARCHAR(3) DEFAULT 'USD',
+    is_primary BOOLEAN DEFAULT FALSE,
+    is_verified BOOLEAN DEFAULT FALSE,
+    verification_document_url TEXT,
+    metadata JSONB,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE payment_method_details (
+    id BIGSERIAL PRIMARY KEY,
+    payment_id BIGINT NOT NULL REFERENCES payments(id) ON DELETE CASCADE,
+    payment_method payment_method_type NOT NULL,
+    gateway payment_gateway NOT NULL,
+    method_details JSONB NOT NULL,
+    bank_id BIGINT REFERENCES supported_banks(id) ON DELETE SET NULL,
+    upi_id BIGINT REFERENCES upi_support(id) ON DELETE SET NULL,
+    wallet_id BIGINT REFERENCES wallet_support(id) ON DELETE SET NULL,
+    card_network card_network,
+    card_last_four VARCHAR(4),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    CHECK (
+        (payment_method = 'bank' AND bank_id IS NOT NULL) OR
+        (payment_method = 'upi' AND upi_id IS NOT NULL) OR
+        (payment_method = 'wallet' AND wallet_id IS NOT NULL) OR
+        (payment_method IN ('card', 'net_banking', 'cod'))
+    )
+);
+
+-- =====================================================
+-- HISTORY & AUDIT TABLES
+-- =====================================================
+
 CREATE TABLE password_history (
     id BIGSERIAL PRIMARY KEY,
     user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -628,453 +896,211 @@ CREATE TABLE activity_history (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- Supported Banks Table with proper FKs
-CREATE TABLE supported_banks (
-    id BIGSERIAL PRIMARY KEY,
-    tenant_id BIGINT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
-    bank_name VARCHAR(100) NOT NULL,
-    bank_code VARCHAR(20) NOT NULL,
-    bank_logo_url TEXT,
-    country_code VARCHAR(3) NOT NULL REFERENCES countries(code) ON DELETE RESTRICT,
-    is_active BOOLEAN DEFAULT TRUE,
-    status bank_status DEFAULT 'active',
-    processing_fee DECIMAL(5,2) DEFAULT 0,
-    min_amount DECIMAL(10,2) DEFAULT 0,
-    max_amount DECIMAL(10,2) DEFAULT 100000,
-    supported_gateways payment_gateway[],
-    metadata JSONB,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(tenant_id, bank_code, country_code)
-);
-
--- UPI Support Table with proper FKs
-CREATE TABLE upi_support (
-    id BIGSERIAL PRIMARY KEY,
-    tenant_id BIGINT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
-    upi_id VARCHAR(100) NOT NULL,
-    upi_name VARCHAR(100) NOT NULL,
-    upi_type upi_type DEFAULT 'public',
-    qr_code_url TEXT,
-    is_active BOOLEAN DEFAULT TRUE,
-    supported_apps VARCHAR(100)[],
-    max_amount_per_transaction DECIMAL(10,2) DEFAULT 100000,
-    max_transactions_per_day INTEGER DEFAULT 10,
-    processing_fee DECIMAL(5,2) DEFAULT 0,
-    metadata JSONB,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(tenant_id, upi_id)
-);
-
--- Wallet Support Table with proper FKs
-CREATE TABLE wallet_support (
-    id BIGSERIAL PRIMARY KEY,
-    tenant_id BIGINT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
-    wallet_name VARCHAR(100) NOT NULL,
-    wallet_code VARCHAR(50) NOT NULL,
-    wallet_logo_url TEXT,
-    is_active BOOLEAN DEFAULT TRUE,
-    country_code VARCHAR(3) NOT NULL REFERENCES countries(code) ON DELETE RESTRICT,
-    min_amount DECIMAL(10,2) DEFAULT 0,
-    max_amount DECIMAL(10,2) DEFAULT 50000,
-    processing_fee DECIMAL(5,2) DEFAULT 0,
-    supported_currencies VARCHAR(3)[],
-    metadata JSONB,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(tenant_id, wallet_code, country_code)
-);
-
--- Card Networks Support with proper FKs
-CREATE TABLE card_support (
-    id BIGSERIAL PRIMARY KEY,
-    tenant_id BIGINT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
-    card_network card_network NOT NULL,
-    card_type card_type NOT NULL,
-    is_active BOOLEAN DEFAULT TRUE,
-    country_code VARCHAR(3) NOT NULL REFERENCES countries(code) ON DELETE RESTRICT,
-    processing_fee_percentage DECIMAL(5,2) DEFAULT 0,
-    processing_fee_fixed DECIMAL(10,2) DEFAULT 0,
-    min_amount DECIMAL(10,2) DEFAULT 0,
-    max_amount DECIMAL(10,2) DEFAULT 100000,
-    supported_gateways payment_gateway[],
-    metadata JSONB,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(tenant_id, card_network, card_type, country_code)
-);
-
--- Payment Gateway Configuration with proper FKs
-CREATE TABLE payment_gateway_config (
-    id BIGSERIAL PRIMARY KEY,
-    tenant_id BIGINT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
-    gateway payment_gateway NOT NULL,
-    is_active BOOLEAN DEFAULT FALSE,
-    is_live BOOLEAN DEFAULT FALSE,
-    api_key VARCHAR(255),
-    api_secret VARCHAR(255),
-    webhook_secret VARCHAR(255),
-    merchant_id VARCHAR(100),
-    gateway_credentials JSONB,
-    supported_currencies VARCHAR(3)[] DEFAULT '{USD}',
-    supported_countries VARCHAR(3)[],
-    config_metadata JSONB,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(tenant_id, gateway)
-);
-
--- Bank Account Details for Payouts/Settlements with proper FKs
-CREATE TABLE tenant_bank_accounts (
-    id BIGSERIAL PRIMARY KEY,
-    tenant_id BIGINT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
-    account_holder_name VARCHAR(255) NOT NULL,
-    account_number VARCHAR(50) NOT NULL,
-    bank_name VARCHAR(100) NOT NULL,
-    bank_code VARCHAR(20) NOT NULL,
-    branch_name VARCHAR(100),
-    branch_address TEXT,
-    account_type VARCHAR(20) CHECK (account_type IN ('savings', 'current', 'corporate')),
-    currency VARCHAR(3) DEFAULT 'USD',
-    is_primary BOOLEAN DEFAULT FALSE,
-    is_verified BOOLEAN DEFAULT FALSE,
-    verification_document_url TEXT,
-    metadata JSONB,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-
--- Payment Method Details with proper FKs (CRITICAL - connects to payments)
-CREATE TABLE payment_method_details (
-    id BIGSERIAL PRIMARY KEY,
-    payment_id BIGINT NOT NULL REFERENCES payments(id) ON DELETE CASCADE,
-    payment_method payment_method_type NOT NULL,
-    gateway payment_gateway NOT NULL,
-    method_details JSONB NOT NULL,
-    bank_id BIGINT REFERENCES supported_banks(id) ON DELETE SET NULL,
-    upi_id BIGINT REFERENCES upi_support(id) ON DELETE SET NULL,
-    wallet_id BIGINT REFERENCES wallet_support(id) ON DELETE SET NULL,
-    card_network card_network,
-    card_last_four VARCHAR(4),
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    -- Ensure only one method reference is set
-    CHECK (
-        (payment_method = 'bank' AND bank_id IS NOT NULL) OR
-        (payment_method = 'upi' AND upi_id IS NOT NULL) OR
-        (payment_method = 'wallet' AND wallet_id IS NOT NULL) OR
-        (payment_method IN ('card', 'net_banking', 'cod'))
-    )
-);
-
-CREATE TABLE login_settings (
-    id BIGSERIAL PRIMARY KEY,
-    tenant_id BIGINT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
-    password_policy password_policy_type DEFAULT 'medium',
-    min_password_length INTEGER DEFAULT 8,
-    require_uppercase BOOLEAN DEFAULT TRUE,
-    require_lowercase BOOLEAN DEFAULT TRUE,
-    require_numbers BOOLEAN DEFAULT TRUE,
-    require_special_chars BOOLEAN DEFAULT TRUE,
-    max_password_age_days INTEGER DEFAULT 90,
-    password_history_count INTEGER DEFAULT 5,
-    max_login_attempts INTEGER DEFAULT 5,
-    lockout_duration_minutes INTEGER DEFAULT 30,
-    username_policy username_policy_type DEFAULT 'email',
-    session_timeout_minutes INTEGER DEFAULT 30,
-    mfa_required BOOLEAN DEFAULT FALSE,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(tenant_id)
-);
-
-CREATE TABLE session_settings (
-    id BIGSERIAL PRIMARY KEY,
-    tenant_id BIGINT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
-    storage_type session_storage_type DEFAULT 'redis',
-    timeout_type session_timeout_type DEFAULT 'sliding',
-    session_timeout_minutes INTEGER DEFAULT 30,
-    absolute_timeout_minutes INTEGER DEFAULT 480, -- 8 hours
-    sliding_timeout_minutes INTEGER DEFAULT 30,
-    max_concurrent_sessions INTEGER DEFAULT 5,
-    regenerate_session BOOLEAN DEFAULT TRUE,
-    secure_cookies BOOLEAN DEFAULT TRUE,
-    http_only_cookies BOOLEAN DEFAULT TRUE,
-    same_site_policy VARCHAR(20) DEFAULT 'lax',
-    cookie_domain VARCHAR(255),
-    cookie_path VARCHAR(100) DEFAULT '/',
-    enable_session_cleanup BOOLEAN DEFAULT TRUE,
-    cleanup_interval_minutes INTEGER DEFAULT 60,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(tenant_id)
-);
-
-CREATE TABLE rate_limit_settings (
-    id BIGSERIAL PRIMARY KEY,
-    tenant_id BIGINT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
-    strategy rate_limit_strategy DEFAULT 'fixed_window',
-    requests_per_minute INTEGER DEFAULT 60,
-    requests_per_hour INTEGER DEFAULT 1000,
-    requests_per_day INTEGER DEFAULT 10000,
-    burst_capacity INTEGER DEFAULT 10,
-    enabled BOOLEAN DEFAULT TRUE,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(tenant_id)
-);
-
-CREATE TABLE logging_settings (
-    id BIGSERIAL PRIMARY KEY,
-    tenant_id BIGINT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
-    log_level VARCHAR(10) DEFAULT 'INFO',
-    enable_audit_log BOOLEAN DEFAULT TRUE,
-    enable_access_log BOOLEAN DEFAULT TRUE,
-    enable_security_log BOOLEAN DEFAULT TRUE,
-    retention_days INTEGER DEFAULT 30,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(tenant_id)
-);
-
-CREATE TABLE infrastructure_settings (
-    id BIGSERIAL PRIMARY KEY,
-    tenant_id BIGINT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
-    service_name VARCHAR(100) NOT NULL,
-    service_type VARCHAR(50) NOT NULL,
-    host VARCHAR(255) NOT NULL,
-    port INTEGER,
-    username VARCHAR(255),
-    password VARCHAR(255),
-    database_name VARCHAR(100),
-    connection_string TEXT,
-    max_connections INTEGER DEFAULT 20,
-    timeout_seconds INTEGER DEFAULT 30,
-    status service_status DEFAULT 'active',
-    health_check_url VARCHAR(500),
-    metadata JSONB,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(tenant_id, service_name)
-);
-
-CREATE TABLE service_urls (
-    id BIGSERIAL PRIMARY KEY,
-    tenant_id BIGINT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
-    service_name VARCHAR(100) NOT NULL,
-    base_url VARCHAR(500) NOT NULL,
-    health_endpoint VARCHAR(200),
-    api_version VARCHAR(20),
-    timeout_ms INTEGER DEFAULT 30000,
-    retry_attempts INTEGER DEFAULT 3,
-    circuit_breaker_enabled BOOLEAN DEFAULT TRUE,
-    status service_status DEFAULT 'active',
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(tenant_id, service_name)
-);
-
-CREATE TABLE security_settings (
-    id BIGSERIAL PRIMARY KEY,
-    tenant_id BIGINT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
-    jwt_secret_key VARCHAR(255) NOT NULL,
-    jwt_algorithm VARCHAR(20) DEFAULT 'HS256',
-    access_token_expiry_minutes INTEGER DEFAULT 30,
-    refresh_token_expiry_days INTEGER DEFAULT 7,
-    password_reset_expiry_minutes INTEGER DEFAULT 30,
-    max_login_attempts INTEGER DEFAULT 5,
-    account_lockout_minutes INTEGER DEFAULT 30,
-    require_https BOOLEAN DEFAULT TRUE,
-    cors_origins JSONB DEFAULT '["http://localhost:3000"]',
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(tenant_id)
-);
-
 -- =====================================================
--- INDEXES FOR BETTER PERFORMANCE
+-- INDEXES (AFTER ALL TABLES ARE CREATED)
 -- =====================================================
+
+-- Users indexes
 CREATE INDEX idx_users_tenant_id ON users(tenant_id);
 CREATE INDEX idx_users_email ON users(email);
+
+-- Products indexes
 CREATE INDEX idx_products_tenant_id ON products(tenant_id);
 CREATE INDEX idx_products_category_id ON products(category_id);
+CREATE INDEX idx_products_sku ON products(sku);
+
+-- Orders indexes
 CREATE INDEX idx_orders_user_id ON orders(user_id);
 CREATE INDEX idx_orders_tenant_id ON orders(tenant_id);
 CREATE INDEX idx_orders_status ON orders(status);
+CREATE INDEX idx_orders_created_at ON orders(created_at);
+
+-- Payments indexes
 CREATE INDEX idx_payments_order_id ON payments(order_id);
 CREATE INDEX idx_payments_status ON payments(status);
-CREATE INDEX idx_cart_items_user_id ON cart_items(user_id);
-CREATE INDEX idx_wishlists_user_id ON wishlists(user_id);
-CREATE INDEX idx_notification_logs_tenant_id ON notification_logs(tenant_id);
-CREATE INDEX idx_activity_logs_user_id ON activity_logs(user_id);
-CREATE INDEX idx_sessions_user_id ON sessions(user_id);
-CREATE INDEX idx_login_history_user_id ON login_history(user_id);
--- Indexes for banking tables
-CREATE INDEX idx_supported_banks_tenant_country ON supported_banks(tenant_id, country_code);
-CREATE INDEX idx_supported_banks_country ON supported_banks(country_code);
-CREATE INDEX idx_upi_support_tenant ON upi_support(tenant_id);
-CREATE INDEX idx_wallet_support_tenant_country ON wallet_support(tenant_id, country_code);
-CREATE INDEX idx_card_support_tenant_country ON card_support(tenant_id, country_code);
-CREATE INDEX idx_payment_gateway_config_tenant ON payment_gateway_config(tenant_id);
-CREATE INDEX idx_tenant_bank_accounts_tenant ON tenant_bank_accounts(tenant_id);
-CREATE INDEX idx_payment_method_details_payment ON payment_method_details(payment_id);
-CREATE INDEX idx_payment_method_details_bank ON payment_method_details(bank_id);
-CREATE INDEX idx_payment_method_details_upi ON payment_method_details(upi_id);
-CREATE INDEX idx_payment_method_details_wallet ON payment_method_details(wallet_id);
--- Indexes for login_settings
+CREATE INDEX idx_payments_created_at ON payments(created_at);
+
+-- Security & Settings indexes
+CREATE INDEX idx_security_settings_tenant_id ON security_settings(tenant_id);
 CREATE INDEX idx_login_settings_tenant_id ON login_settings(tenant_id);
-CREATE INDEX idx_login_settings_updated_at ON login_settings(updated_at);
-
--- Indexes for session_settings
 CREATE INDEX idx_session_settings_tenant_id ON session_settings(tenant_id);
-CREATE INDEX idx_session_settings_updated_at ON session_settings(updated_at);
-
--- Indexes for rate_limit_settings
 CREATE INDEX idx_rate_limit_settings_tenant_id ON rate_limit_settings(tenant_id);
-CREATE INDEX idx_rate_limit_settings_updated_at ON rate_limit_settings(updated_at);
-
--- Indexes for logging_settings
 CREATE INDEX idx_logging_settings_tenant_id ON logging_settings(tenant_id);
-CREATE INDEX idx_logging_settings_updated_at ON logging_settings(updated_at);
+CREATE INDEX idx_infrastructure_settings_tenant_id ON infrastructure_settings(tenant_id);
+CREATE INDEX idx_service_urls_tenant_id ON service_urls(tenant_id);
 
--- Additional indexes for existing tables that might be missing
-CREATE INDEX idx_sessions_user_id ON sessions(user_id);
-CREATE INDEX idx_sessions_tenant_id ON sessions(tenant_id);
-CREATE INDEX idx_sessions_expires_at ON sessions(expires_at);
-CREATE INDEX idx_login_history_user_id ON login_history(user_id);
-CREATE INDEX idx_login_history_tenant_id ON login_history(tenant_id);
-CREATE INDEX idx_login_history_login_time ON login_history(login_time);
-CREATE INDEX idx_activity_logs_tenant_id ON activity_logs(tenant_id);
-CREATE INDEX idx_activity_logs_created_at ON activity_logs(created_at);
-CREATE INDEX idx_notification_logs_created_at ON notification_logs(created_at);
-CREATE INDEX idx_notification_logs_status ON notification_logs(status);
-
--- Composite indexes for better performance
+-- Composite indexes for performance
 CREATE INDEX idx_sessions_tenant_user ON sessions(tenant_id, user_id);
 CREATE INDEX idx_login_history_tenant_user_time ON login_history(tenant_id, user_id, login_time);
 CREATE INDEX idx_activity_logs_tenant_action_time ON activity_logs(tenant_id, action, created_at);
--- Indexes for new infrastructure tables
-CREATE INDEX idx_infrastructure_settings_tenant_id ON infrastructure_settings(tenant_id);
-CREATE INDEX idx_infrastructure_settings_service_name ON infrastructure_settings(service_name);
-CREATE INDEX idx_infrastructure_settings_service_type ON infrastructure_settings(service_type);
-CREATE INDEX idx_infrastructure_settings_status ON infrastructure_settings(status);
-CREATE INDEX idx_infrastructure_settings_updated_at ON infrastructure_settings(updated_at);
-
-CREATE INDEX idx_service_urls_tenant_id ON service_urls(tenant_id);
-CREATE INDEX idx_service_urls_service_name ON service_urls(service_name);
-CREATE INDEX idx_service_urls_status ON service_urls(status);
-CREATE INDEX idx_service_urls_updated_at ON service_urls(updated_at);
-
-CREATE INDEX idx_security_settings_tenant_id ON security_settings(tenant_id);
-CREATE INDEX idx_security_settings_updated_at ON security_settings(updated_at);
-
--- Composite indexes for infrastructure queries
-CREATE INDEX idx_infrastructure_tenant_service ON infrastructure_settings(tenant_id, service_name);
-CREATE INDEX idx_infrastructure_tenant_type ON infrastructure_settings(tenant_id, service_type);
-CREATE INDEX idx_service_urls_tenant_base ON service_urls(tenant_id, base_url);
-
--- Performance indexes for frequently queried settings
-CREATE INDEX idx_tenant_system_settings_tenant_key ON tenant_system_settings(tenant_id, setting_key);
-CREATE INDEX idx_system_settings_key ON system_settings(setting_key);
-CREATE INDEX idx_site_settings_tenant_key ON site_settings(tenant_id, setting_key);
 
 -- =====================================================
--- FIXED: SAFE SEED DATA (with ON CONFLICT to avoid errors)
+-- SEED DATA (INSERT AFTER ALL TABLES AND INDEXES)
 -- =====================================================
--- FIXED: Insert countries first (before tenants)
+
+-- Insert countries
 INSERT INTO countries (name, code, currency_code, is_active) VALUES
 ('India', 'IN', 'INR', true),
 ('United States', 'US', 'USD', true),
 ('United Kingdom', 'UK', 'GBP', true)
 ON CONFLICT (code) DO NOTHING;
 
--- Create a default tenant first
+-- Insert default tenant
 INSERT INTO tenants (id, name, domain, contact_email, country_code, tax_type, status)
 VALUES (1, 'Default Tenant', 'default.local', 'admin@default.local', 'IN', 'gst', 'active')
 ON CONFLICT (id) DO NOTHING;
 
--- Sample data for banking (using the tenant we just created)
-INSERT INTO supported_banks (tenant_id, bank_name, bank_code, country_code, is_active) VALUES
-(1, 'State Bank of India', 'SBIN0000001', 'IN', true),
-(1, 'HDFC Bank', 'HDFC0000001', 'IN', true),
-(1, 'ICICI Bank', 'ICIC0000001', 'IN', true)
-ON CONFLICT (tenant_id, bank_code, country_code) DO NOTHING;
+-- Insert security settings
+INSERT INTO security_settings (tenant_id, jwt_secret_key, jwt_algorithm, access_token_expiry_minutes, refresh_token_expiry_days, password_reset_expiry_minutes, require_https, max_login_attempts, account_lockout_minutes, cors_origins) VALUES
+(1, 'your-super-secure-jwt-secret-key-change-in-production-64-chars-minimum', 'HS256', 30, 7, 30, true, 5, 30, '["http://localhost:3000", "https://app.pavitra.shop", "https://admin.pavitra.shop"]')
+ON CONFLICT (tenant_id) DO UPDATE SET
+    jwt_secret_key = EXCLUDED.jwt_secret_key,
+    updated_at = CURRENT_TIMESTAMP;
 
-INSERT INTO upi_support (tenant_id, upi_id, upi_name, is_active) VALUES
-(1, 'merchant@ybl', 'Google Pay', true),
-(1, 'merchant@paytm', 'PayTM UPI', true)
-ON CONFLICT (tenant_id, upi_id) DO NOTHING;
+-- Insert session settings
+INSERT INTO session_settings (tenant_id, storage_type, timeout_type, session_timeout_minutes, absolute_timeout_minutes, sliding_timeout_minutes, max_concurrent_sessions, regenerate_session, secure_cookies, http_only_cookies, same_site_policy, cookie_domain, cookie_path, enable_session_cleanup, cleanup_interval_minutes) VALUES
+(1, 'redis', 'sliding', 30, 480, 30, 5, true, true, true, 'lax', NULL, '/', true, 60)
+ON CONFLICT (tenant_id) DO UPDATE SET
+    updated_at = CURRENT_TIMESTAMP;
 
-INSERT INTO wallet_support (tenant_id, wallet_name, wallet_code, country_code, is_active) VALUES
-(1, 'PayTM Wallet', 'PAYTM_WALLET', 'IN', true),
-(1, 'PhonePe Wallet', 'PHONEPE_WALLET', 'IN', true)
-ON CONFLICT (tenant_id, wallet_code, country_code) DO NOTHING;
+-- Insert rate limit settings
+INSERT INTO rate_limit_settings (tenant_id, strategy, requests_per_minute, requests_per_hour, requests_per_day, burst_capacity, enabled) VALUES
+(1, 'fixed_window', 60, 1000, 10000, 10, true)
+ON CONFLICT (tenant_id) DO UPDATE SET
+    updated_at = CURRENT_TIMESTAMP;
 
-INSERT INTO card_support (tenant_id, card_network, card_type, country_code, is_active) VALUES
-(1, 'visa', 'credit', 'IN', true),
-(1, 'mastercard', 'debit', 'IN', true),
-(1, 'rupay', 'debit', 'IN', true)
-ON CONFLICT (tenant_id, card_network, card_type, country_code) DO NOTHING;
+-- Insert login settings
+INSERT INTO login_settings (tenant_id, password_policy, min_password_length, require_uppercase, require_lowercase, require_numbers, require_special_chars, max_password_age_days, password_history_count, max_login_attempts, lockout_duration_minutes, username_policy, session_timeout_minutes, mfa_required) VALUES
+(1, 'medium', 8, true, true, true, true, 90, 5, 5, 30, 'email', 30, false)
+ON CONFLICT (tenant_id) DO UPDATE SET
+    updated_at = CURRENT_TIMESTAMP;
 
-INSERT INTO payment_gateway_config (tenant_id, gateway, is_active, is_live) VALUES
-(1, 'razorpay', true, false),
-(1, 'stripe', true, false)
-ON CONFLICT (tenant_id, gateway) DO NOTHING;
+-- Insert logging settings
+INSERT INTO logging_settings (tenant_id, log_level, enable_audit_log, enable_access_log, enable_security_log, retention_days) VALUES
+(1, 'INFO', true, true, true, 30)
+ON CONFLICT (tenant_id) DO UPDATE SET
+    updated_at = CURRENT_TIMESTAMP;
 
--- Insert default settings for tenant 1
-INSERT INTO login_settings (tenant_id) VALUES (1) ON CONFLICT (tenant_id) DO NOTHING;
-INSERT INTO session_settings (tenant_id) VALUES (1) ON CONFLICT (tenant_id) DO NOTHING;
-INSERT INTO rate_limit_settings (tenant_id) VALUES (1) ON CONFLICT (tenant_id) DO NOTHING;
-INSERT INTO logging_settings (tenant_id) VALUES (1) ON CONFLICT (tenant_id) DO NOTHING;
-
--- Insert infrastructure settings for tenant 1
-INSERT INTO infrastructure_settings (tenant_id, service_name, service_type, host, port, username, password, database_name) VALUES
--- Database
-(1, 'main_database', 'postgresql', 'postgres', 5432, 'root', 'root123', 'pavitra_db'),
--- Redis
-(1, 'cache_redis', 'redis', 'redis', 6379, '', '', '0'),
-(1, 'session_redis', 'redis', 'redis', 6379, '', '', '1'),
--- RabbitMQ
-(1, 'message_queue', 'rabbitmq', 'rabbitmq', 5672, 'guest', 'guest', '')
-ON CONFLICT (tenant_id, service_name) DO NOTHING;
+-- Insert infrastructure settings
+INSERT INTO infrastructure_settings (tenant_id, service_name, service_type, host, port, username, password, database_name, status) VALUES
+(1, 'main_database', 'postgresql', 'postgres', 5432, 'root', 'root123', 'pavitra_db', 'active'),
+(1, 'cache_redis', 'redis', 'redis', 6379, '', '', '0', 'active'),
+(1, 'session_redis', 'redis', 'redis', 6379, '', '', '1', 'active'),
+(1, 'rate_limit_redis', 'redis', 'redis', 6379, '', '', '2', 'active'),
+(1, 'message_queue', 'rabbitmq', 'rabbitmq', 5672, 'guest', 'guest', '', 'active')
+ON CONFLICT (tenant_id, service_name) DO UPDATE SET
+    updated_at = CURRENT_TIMESTAMP;
 
 -- Insert service URLs
-INSERT INTO service_urls (tenant_id, service_name, base_url, health_endpoint) VALUES
--- Internal Services
-(1, 'auth_service', 'http://auth:8000', '/health'),
-(1, 'product_service', 'http://product:8001', '/health'),
-(1, 'order_service', 'http://order:8002', '/health'),
-(1, 'payment_service', 'http://payment:8003', '/health'),
-(1, 'notification_service', 'http://notification:8004', '/health'),
--- External Services
-(1, 'razorpay_api', 'https://api.razorpay.com/v1', '/'),
-(1, 'stripe_api', 'https://api.stripe.com/v1', '/')
-ON CONFLICT (tenant_id, service_name) DO NOTHING;
+INSERT INTO service_urls (tenant_id, service_name, base_url, health_endpoint, timeout_ms, retry_attempts, circuit_breaker_enabled, status) VALUES
+(1, 'auth_service', 'http://auth:8000', '/health', 30000, 3, true, 'active'),
+(1, 'product_service', 'http://product:8001', '/health', 30000, 3, true, 'active'),
+(1, 'order_service', 'http://order:8002', '/health', 30000, 3, true, 'active'),
+(1, 'payment_service', 'http://payment:8003', '/health', 30000, 3, true, 'active'),
+(1, 'notification_service', 'http://notification:8004', '/health', 30000, 3, true, 'active')
+ON CONFLICT (tenant_id, service_name) DO UPDATE SET
+    updated_at = CURRENT_TIMESTAMP;
 
--- Insert security settings
-INSERT INTO security_settings (tenant_id, jwt_secret_key) VALUES
-(1, 'your-super-secure-jwt-secret-key-change-in-production')
-ON CONFLICT (tenant_id) DO NOTHING;
+-- Insert default roles
+INSERT INTO user_roles (id, name, description, is_system_role) VALUES
+(1, 'super_admin', 'Full system access', true),
+(2, 'admin', 'Administrator with management rights', true),
+(3, 'manager', 'Business manager', true),
+(4, 'customer', 'Regular customer', true)
+ON CONFLICT (id) DO NOTHING;
 
--- Insert system settings (for global configurations)
+-- Insert permissions
+INSERT INTO permissions (id, name, description, module) VALUES
+(1, 'users:create', 'Create users', 'users'),
+(2, 'users:read', 'View users', 'users'),
+(3, 'users:update', 'Update users', 'users'),
+(4, 'users:delete', 'Delete users', 'users'),
+(5, 'products:create', 'Create products', 'products'),
+(6, 'products:read', 'View products', 'products'),
+(7, 'products:update', 'Update products', 'products'),
+(8, 'products:delete', 'Delete products', 'products'),
+(9, 'orders:create', 'Create orders', 'orders'),
+(10, 'orders:read', 'View orders', 'orders'),
+(11, 'orders:read_all', 'View all orders', 'orders'),
+(12, 'orders:update_status', 'Update order status', 'orders'),
+(13, 'analytics:view', 'View analytics', 'analytics'),
+(14, 'profile:read', 'View own profile', 'profile'),
+(15, 'profile:update', 'Update own profile', 'profile'),
+(16, 'cart:manage', 'Manage shopping cart', 'cart')
+ON CONFLICT (id) DO NOTHING;
+
+-- Assign permissions to roles
+INSERT INTO role_permissions (role_id, permission_id) VALUES
+-- Super Admin gets all permissions
+(1, 1), (1, 2), (1, 3), (1, 4), (1, 5), (1, 6), (1, 7), (1, 8),
+(1, 9), (1, 10), (1, 11), (1, 12), (1, 13), (1, 14), (1, 15), (1, 16),
+-- Admin gets most permissions except some user management
+(2, 2), (2, 3), (2, 5), (2, 6), (2, 7), (2, 8), (2, 11), (2, 12), (2, 13),
+-- Manager gets business operations permissions
+(3, 6), (3, 7), (3, 11), (3, 12), (3, 13),
+-- Customer gets basic permissions
+(4, 6), (4, 9), (4, 10), (4, 14), (4, 15), (4, 16)
+ON CONFLICT (role_id, permission_id) DO NOTHING;
+
+-- Create default super admin user (password: admin123)
+INSERT INTO users (id, tenant_id, first_name, last_name, email, password_hash) VALUES
+(1, 1, 'System', 'Administrator', 'admin@pavitra.shop', '$2b$12$LQv3c1yqBWVHxkd0L9kZnOrBbESMHp5sMo8LaSMa7ZQYeJV.YFqJK')
+ON CONFLICT (id) DO NOTHING;
+
+-- Assign super admin role to default user
+INSERT INTO user_role_assignments (user_id, role_id, assigned_by) VALUES
+(1, 1, 1)
+ON CONFLICT (user_id, role_id) DO NOTHING;
+
+-- Add user to tenant
+INSERT INTO tenant_users (tenant_id, user_id, role_id) VALUES
+(1, 1, 1)
+ON CONFLICT (tenant_id, user_id) DO NOTHING;
+
+-- Insert system settings
 INSERT INTO system_settings (setting_key, setting_value, setting_type) VALUES
--- Application
 ('app_name', 'Pavitra E-Commerce', 'string'),
 ('app_version', '1.0.0', 'string'),
 ('environment', 'development', 'string'),
--- Features
 ('multi_tenant_enabled', 'true', 'boolean'),
 ('auto_migrations', 'true', 'boolean'),
 ('enable_swagger', 'true', 'boolean'),
--- Performance
 ('default_page_size', '20', 'integer'),
 ('max_page_size', '100', 'integer'),
 ('cache_default_ttl', '300', 'integer')
 ON CONFLICT (setting_key) DO NOTHING;
 
--- FIXED: Removed dangerous sections (CREATE USER, GRANT ALL, ALTER SYSTEM) - run manually if needed in your env
--- FIXED: No pg_reload_conf() - not needed for schema
+
 
 -- =====================================================
--- END OF SCHEMA - READY FOR PRODUCTION
+-- DATABASE USER CREATION (ADD AT THE TOP AFTER EXTENSIONS)
+-- =====================================================
+
+-- Create admin user with full privileges
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'admin') THEN
+        CREATE USER admin WITH PASSWORD 'admin123';
+        ALTER USER admin WITH SUPERUSER CREATEDB CREATEROLE LOGIN;
+    END IF;
+END $$;
+
+-- Grant all privileges on the database
+GRANT ALL PRIVILEGES ON DATABASE pavitra_db TO admin;
+
+-- Grant all privileges on all tables in public schema
+GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO admin;
+GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO admin;
+GRANT ALL PRIVILEGES ON ALL FUNCTIONS IN SCHEMA public TO admin;
+
+-- Ensure future objects are also accessible
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO admin;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO admin;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON FUNCTIONS TO admin;
+
+-- Grant schema usage
+GRANT USAGE ON SCHEMA public TO admin;
+
+-- =====================================================
+-- END OF SCRIPT
 -- =====================================================

@@ -1,187 +1,222 @@
-# backend/shared/config.py
-"""
-Configuration system — THE BRAIN of the entire platform.
-
-RULE: 
-- .env → ONLY for initial DB connection (bootstrap)
-- Everything else → FROM DATABASE (per-tenant, dynamic, auditable)
-
-This file is imported by ALL 8 microservices.
-"""
-
 import os
 from typing import Dict, Any, Optional
 from functools import lru_cache
-from pydantic import BaseSettings, Field, validator
-from sqlalchemy import text
-
-from .database import async_session
+from pydantic_settings import BaseSettings
+from pydantic import Field
 from .logger_middleware import get_logger
 
 logger = get_logger(__name__)
 
 
-# =============================================================================
-# 1. Bootstrap Settings — ONLY from .env / system env
-#    This is the ONLY place we read environment variables.
-# =============================================================================
 class BootstrapSettings(BaseSettings):
-    # Required: How to reach PostgreSQL on first startup
-    database_url: str = Field(..., env="DATABASE_URL")
+    database_url: str = Field(
+        default=...,
+        description="PostgreSQL database URL for configuration storage",
+        env="DATABASE_URL"
+    )
 
-    # Optional overrides (rarely used)
-    app_name: str = Field("Pavitra Platform", env="APP_NAME")
-    environment: str = Field("production", env="ENVIRONMENT")
-    debug: bool = Field(False, env="DEBUG")
-    log_level: str = Field("INFO", env="LOG_LEVEL")
-
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
-        case_sensitive = False
+    model_config = {
+        "env_file": ".env",
+        "env_file_encoding": "utf-8",
+        "case_sensitive": False,
+        "extra": "ignore"
+    }
 
 
-# Singleton — loaded once at import time
+# Only DATABASE_URL comes from environment
 bootstrap = BootstrapSettings()
-settings = bootstrap  # backward compatible alias
+settings = bootstrap
 
 
-# =============================================================================
-# 2. Tenant Settings Cache + Dynamic Loader
-#    All real config comes from here — per tenant, from DB
-# =============================================================================
 @lru_cache(maxsize=128)
 async def get_tenant_config(tenant_id: int) -> Dict[str, Any]:
     """
-    Get COMPLETE runtime configuration for a tenant.
-    Cached aggressively — settings rarely change.
+    Get ALL tenant configuration from database - no environment fallbacks
     """
     if tenant_id <= 0:
-        logger.warning(f"Invalid tenant_id: {tenant_id}")
-        return {}
+        logger.error(f"Invalid tenant_id: {tenant_id}")
+        raise ValueError(f"Invalid tenant_id: {tenant_id}")
 
-    async with async_session() as db:
-        try:
-            # 1. Security Settings (JWT, tokens, etc.)
+    try:
+        # Import here to avoid circular imports
+        from sqlalchemy import text
+        from .database import async_session
+
+        async with async_session() as db:
+            # Security settings - JWT secrets etc.
             sec_result = await db.execute(
                 text("""
-                    SELECT 
+                    SELECT
                         jwt_secret_key, jwt_algorithm,
                         access_token_expiry_minutes, refresh_token_expiry_days,
                         password_reset_expiry_minutes, require_https,
-                        max_login_attempts, account_lockout_minutes
-                    FROM security_settings 
+                        max_login_attempts, account_lockout_minutes,
+                        cors_origins
+                    FROM security_settings
                     WHERE tenant_id = :tid
                 """),
                 {"tid": tenant_id}
             )
             security = sec_result.fetchone()
+            if not security:
+                logger.error(f"No security settings found for tenant {tenant_id}")
+                raise ValueError(f"Security configuration missing for tenant {tenant_id}")
 
-            # 2. Session Settings
+            # Session settings
             sess_result = await db.execute(
                 text("""
                     SELECT storage_type, timeout_type, session_timeout_minutes,
                            absolute_timeout_minutes, sliding_timeout_minutes,
-                           max_concurrent_sessions, secure_cookies
-                    FROM session_settings 
+                           max_concurrent_sessions, secure_cookies,
+                           http_only_cookies, same_site_policy, cookie_domain,
+                           cookie_path, enable_session_cleanup, cleanup_interval_minutes
+                    FROM session_settings
                     WHERE tenant_id = :tid
                 """),
                 {"tid": tenant_id}
             )
             session = sess_result.fetchone()
+            if not session:
+                logger.error(f"No session settings found for tenant {tenant_id}")
+                raise ValueError(f"Session configuration missing for tenant {tenant_id}")
 
-            # 3. Rate Limit Settings
+            # Rate limit settings
             rl_result = await db.execute(
                 text("""
                     SELECT strategy, requests_per_minute, requests_per_hour,
                            requests_per_day, burst_capacity, enabled
-                    FROM rate_limit_settings 
+                    FROM rate_limit_settings
                     WHERE tenant_id = :tid
                 """),
                 {"tid": tenant_id}
             )
             rate_limit = rl_result.fetchone()
+            if not rate_limit:
+                logger.error(f"No rate limit settings found for tenant {tenant_id}")
+                raise ValueError(f"Rate limit configuration missing for tenant {tenant_id}")
 
-            # 4. Infrastructure Services (Redis, RabbitMQ, etc.)
+            # Logging settings
+            log_result = await db.execute(
+                text("""
+                    SELECT log_level, enable_audit_log, enable_access_log, 
+                           enable_security_log, retention_days
+                    FROM logging_settings
+                    WHERE tenant_id = :tid
+                """),
+                {"tid": tenant_id}
+            )
+            logging_config = log_result.fetchone()
+            if not logging_config:
+                logger.error(f"No logging settings found for tenant {tenant_id}")
+                raise ValueError(f"Logging configuration missing for tenant {tenant_id}")
+
+            # Infrastructure settings - Redis, RabbitMQ etc.
             infra_result = await db.execute(
                 text("""
-                    SELECT service_name, service_type, host, port, username, 
-                           password, database_name, connection_string, status
-                    FROM infrastructure_settings 
+                    SELECT service_name, service_type, host, port, username,
+                           password, database_name, connection_string, status,
+                           max_connections, timeout_seconds, health_check_url
+                    FROM infrastructure_settings
                     WHERE tenant_id = :tid AND status = 'active'
                 """),
                 {"tid": tenant_id}
             )
             infra_rows = infra_result.fetchall()
             infrastructure = {
-                row.service_name: row._asdict() for row in infra_rows
+                row.service_name: dict(row._mapping) for row in infra_rows
             }
 
-            # 5. Service URLs (internal + external APIs)
+            # Service URLs
             urls_result = await db.execute(
                 text("""
-                    SELECT service_name, base_url, health_endpoint, status
-                    FROM service_urls 
+                    SELECT service_name, base_url, health_endpoint, status,
+                           timeout_ms, retry_attempts, circuit_breaker_enabled
+                    FROM service_urls
                     WHERE tenant_id = :tid AND status = 'active'
                 """),
                 {"tid": tenant_id}
             )
             service_urls = {
-                row.service_name: row._asdict() for row in urls_result.fetchall()
+                row.service_name: dict(row._mapping) for row in urls_result.fetchall()
             }
 
-            # 6. Generic tenant settings (key-value)
+            # System settings
             sys_result = await db.execute(
                 text("SELECT setting_key, setting_value FROM tenant_system_settings WHERE tenant_id = :tid"),
                 {"tid": tenant_id}
             )
             system_settings = {row.setting_key: row.setting_value for row in sys_result.fetchall()}
 
-            # Return complete config object
             config = {
-                "security": security._asdict() if security else {},
-                "session": session._asdict() if session else {},
-                "rate_limit": rate_limit._asdict() if rate_limit else {},
+                "security": dict(security._mapping),
+                "session": dict(session._mapping),
+                "rate_limit": dict(rate_limit._mapping),
+                "logging": dict(logging_config._mapping),
                 "infrastructure": infrastructure,
                 "service_urls": service_urls,
                 "system": system_settings,
             }
 
-            logger.debug(f"Tenant {tenant_id} config loaded and cached")
+            logger.info(f"Tenant {tenant_id} configuration loaded from database")
             return config
 
-        except Exception as e:
-            logger.error(f"Failed to load config for tenant {tenant_id}: {e}", exc_info=True)
-            return {}
+    except Exception as e:
+        logger.critical(f"Failed to load configuration from database for tenant {tenant_id}: {e}")
+        raise
 
 
-# =============================================================================
-# 3. Convenience Helpers
-# =============================================================================
-async def get_jwt_secret(tenant_id: int) -> Optional[str]:
+async def get_jwt_secret(tenant_id: int) -> str:
+    """Get JWT secret ONLY from database"""
     config = await get_tenant_config(tenant_id)
-    return config.get("security", {}).get("jwt_secret_key")
+    secret = config.get("security", {}).get("jwt_secret_key")
+    if not secret:
+        raise ValueError(f"JWT secret not configured for tenant {tenant_id}")
+    return secret
 
 
-async def get_redis_config(tenant_id: int, service_name: str = "cache_redis") -> Optional[Dict]:
+async def get_redis_config(tenant_id: int, service_name: str = "cache_redis") -> Dict[str, Any]:
+    """Get Redis config ONLY from database"""
     config = await get_tenant_config(tenant_id)
-    return config.get("infrastructure", {}).get(service_name)
+    redis_config = config.get("infrastructure", {}).get(service_name)
+    if not redis_config:
+        raise ValueError(f"Redis configuration '{service_name}' not found for tenant {tenant_id}")
+    return redis_config
 
 
-async def get_system_setting(key: str, default: Any = None) -> Any:
-    # Global system settings (not tenant-specific)
-    # You can add a system_settings cache later
-    return default
+async def get_log_level(tenant_id: int) -> str:
+    """Get log level ONLY from database"""
+    config = await get_tenant_config(tenant_id)
+    log_level = config.get("logging", {}).get("log_level", "INFO")
+    return log_level.upper()
 
 
-# Clear cache (e.g. after admin updates settings)
+async def get_session_config(tenant_id: int) -> Dict[str, Any]:
+    """Get session config ONLY from database"""
+    config = await get_tenant_config(tenant_id)
+    session_config = config.get("session", {})
+    if not session_config:
+        raise ValueError(f"Session configuration not found for tenant {tenant_id}")
+    return session_config
+
+
+async def get_rate_limit_config(tenant_id: int) -> Dict[str, Any]:
+    """Get rate limit config ONLY from database"""
+    config = await get_tenant_config(tenant_id)
+    rate_limit_config = config.get("rate_limit", {})
+    if not rate_limit_config:
+        raise ValueError(f"Rate limit configuration not found for tenant {tenant_id}")
+    return rate_limit_config
+
+
 def clear_tenant_config_cache(tenant_id: Optional[int] = None):
+    """Clear configuration cache"""
     if tenant_id:
-        get_tenant_config.cache_clear()  # SQLAlchemy 2.0+ supports this
+        get_tenant_config.cache_clear()
         logger.info(f"Config cache cleared for tenant {tenant_id}")
     else:
         get_tenant_config.cache_clear()
+        logger.info("All tenant config caches cleared")
 
 
-# Export for backward compatibility
+# Alias for backward compatibility
 get_tenant_settings = get_tenant_config

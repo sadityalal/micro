@@ -1,13 +1,3 @@
-# backend/shared/session_middleware.py
-"""
-FINAL SESSION MIDDLEWARE — NOVEMBER 15, 2025
-No hacks. No None(app). Only perfection.
-Works with:
-- infra_service.get_redis_client(tenant_id, "session")
-- SessionSettings from DB
-- create_and_set_session helper
-"""
-
 import os
 import secrets
 import json
@@ -15,10 +5,10 @@ import time
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any
 from fastapi import Request, Response
-from fastapi.middleware.base import BaseHTTPMiddleware
-
+from starlette.middleware.base import BaseHTTPMiddleware
 from .infrastructure_service import infra_service
 from .logger_middleware import get_logger
+from .config import get_session_config
 
 logger = get_logger(__name__)
 
@@ -31,24 +21,35 @@ class SecureSessionMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next):
         tenant_id = self._get_tenant_id(request)
-        session_id = request.cookies.get(self.COOKIE_NAME)
 
-        session_data = None
-        if session_id and self._is_valid_format(session_id):
-            session_data = await self._load_and_refresh_session(tenant_id, session_id, request.client.host)
+        try:
+            # Get session config from database
+            session_config = await get_session_config(tenant_id)
+            session_id = request.cookies.get(self.COOKIE_NAME)
+            session_data = None
 
-        # Attach to state
-        request.state.tenant_id = tenant_id
-        request.state.session = session_data
+            if session_id and self._is_valid_format(session_id):
+                session_data = await self._load_and_refresh_session(
+                    tenant_id, session_id, request.client.host, session_config
+                )
 
-        # Process request
-        response = await call_next(request)
+            request.state.tenant_id = tenant_id
+            request.state.session = session_data
+            request.state.session_config = session_config
 
-        # Only set cookie if session was freshly created (login/register)
-        if session_data and session_data.get("fresh_login") and not request.cookies.get(self.COOKIE_NAME):
-            self._set_secure_cookie(response, session_data["id"], session_data["expires_at"])
+            response = await call_next(request)
 
-        return response
+            if session_data and session_data.get("fresh_login") and not request.cookies.get(self.COOKIE_NAME):
+                self._set_secure_cookie(response, session_data["id"], session_data["expires_at"], session_config)
+
+            return response
+
+        except Exception as e:
+            logger.error(f"Session middleware error for tenant {tenant_id}: {e}")
+            # Continue without session on error
+            request.state.tenant_id = tenant_id
+            request.state.session = None
+            return await call_next(request)
 
     def _get_tenant_id(self, request: Request) -> int:
         header = request.headers.get("x-tenant-id")
@@ -56,9 +57,11 @@ class SecureSessionMiddleware(BaseHTTPMiddleware):
 
     @staticmethod
     def _is_valid_format(sid: str) -> bool:
-        return len(sid) == 43 and all(c in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_" for c in sid)
+        return len(sid) == 43 and all(
+            c in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_" for c in sid)
 
-    async def _load_and_refresh_session(self, tenant_id: int, session_id: str, client_ip: str) -> Optional[Dict[str, Any]]:
+    async def _load_and_refresh_session(self, tenant_id: int, session_id: str, client_ip: str,
+                                        session_config: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         try:
             client = await infra_service.get_redis_client(tenant_id, "session")
             raw = await client.get(f"session:{tenant_id}:{session_id}")
@@ -68,79 +71,39 @@ class SecureSessionMiddleware(BaseHTTPMiddleware):
             session = json.loads(raw)
             now = time.time()
 
-            # Expiry & IP check
+            # Use timeout from database config
+            session_timeout = session_config.get("session_timeout_minutes", 30) * 60
+
             if session.get("expires_at", 0) <= now or session.get("ip") != client_ip:
                 await client.delete(f"session:{tenant_id}:{session_id}")
                 return None
 
-            # Sliding expiration
             session["last_accessed"] = now
-            session["expires_at"] = now + 3600  # will be overridden by SessionSettings later
-            await client.setex(f"session:{tenant_id}:{session_id}", 3600, json.dumps(session))
+            session["expires_at"] = now + session_timeout
 
+            await client.setex(f"session:{tenant_id}:{session_id}", session_timeout, json.dumps(session))
             return session
+
         except Exception as e:
             logger.error(f"Session load failed: {e}")
             return None
 
-    def _set_secure_cookie(self, response: Response, session_id: str, expires_at: float):
-        secure = os.getenv("ENV") == "production" or os.getenv("SECURE_COOKIES", "false").lower() == "true"
+    def _set_secure_cookie(self, response: Response, session_id: str, expires_at: float,
+                           session_config: Dict[str, Any]):
+        secure = session_config.get("secure_cookies", True)
+        http_only = session_config.get("http_only_cookies", True)
+        same_site = session_config.get("same_site_policy", "lax")
+        cookie_path = session_config.get("cookie_path", "/")
+
         response.set_cookie(
             key=self.COOKIE_NAME,
             value=session_id,
-            httponly=True,
+            httponly=http_only,
             secure=secure,
-            samesite="strict",
+            samesite=same_site,
             expires=datetime.fromtimestamp(expires_at, tz=timezone.utc),
-            path="/",
+            path=cookie_path,
         )
 
 
-# ─────────────────────────────────────────────────────────────
-# CLEAN & SAFE HELPER — USE THIS IN LOGIN ENDPOINT
-# ─────────────────────────────────────────────────────────────
-async def create_and_set_session(
-    request: Request,
-    response: Response,
-    tenant_id: int,
-    user_id: int,
-    user_agent: Optional[str] = None,
-) -> Dict[str, Any]:
-    # Invalidate old session
-    old_session = getattr(request.state, "session", None)
-    if old_session and old_session.get("id"):
-        try:
-            client = await infra_service.get_redis_client(tenant_id, "session")
-            await client.delete(f"session:{tenant_id}:{old_session['id']}")
-        except:
-            pass
-
-    session_id = secrets.token_urlsafe(32)
-    now = time.time()
-    ip = request.client.host
-    ua = user_agent or request.headers.get("user-agent", "")
-
-    session_data = {
-        "id": session_id,
-        "tenant_id": tenant_id,
-        "user_id": user_id,
-        "ip": ip,
-        "user_agent": ua,
-        "created_at": now,
-        "expires_at": now + 3600,
-        "last_accessed": now,
-        "fresh_login": True,  # triggers cookie set
-    }
-
-    try:
-        client = await infra_service.get_redis_client(tenant_id, "session")
-        await client.setex(f"session:{tenant_id}:{session_id}", 3600, json.dumps(session_data))
-        logger.info(f"Session created → user={user_id} tenant={tenant_id}")
-    except Exception as e:
-        logger.error(f"Failed to create session: {e}")
-
-    return session_data
-
-
-# Global instance
 session_middleware = SecureSessionMiddleware
