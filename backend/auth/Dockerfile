@@ -10,6 +10,7 @@ RUN apt-get update && apt-get install -y \
 
 # Copy requirements and install
 COPY backend/auth/requirements.txt .
+RUN pip install --upgrade pip
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy ONLY shared module and auth service
