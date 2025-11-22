@@ -104,7 +104,6 @@ class AuthService:
         return encoded_jwt
 
     def verify_token(self, token: str, tenant_id: int) -> Optional[TokenData]:
-        """Verify JWT token and return token data"""
         try:
             security_config = self.get_tenant_security_config(tenant_id)
             payload = jwt.decode(
@@ -112,6 +111,11 @@ class AuthService:
                 security_config["jwt_secret_key"],
                 algorithms=[security_config["jwt_algorithm"]]
             )
+
+            # Check expiration
+            exp_timestamp = payload.get("exp")
+            if not exp_timestamp or datetime.utcnow().timestamp() > exp_timestamp:
+                return None
 
             user_id: int = payload.get("user_id")
             email: str = payload.get("email")

@@ -86,7 +86,7 @@ CREATE TABLE tenants (
 CREATE TABLE users (
     id BIGSERIAL PRIMARY KEY,
     tenant_id BIGINT REFERENCES tenants(id) ON DELETE SET NULL,
-    username VARCHAR(100) UNIQUE
+    username VARCHAR(100) UNIQUE,
     first_name VARCHAR(100) NOT NULL,
     last_name VARCHAR(100) NOT NULL,
     email VARCHAR(255) NOT NULL UNIQUE,
