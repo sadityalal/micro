@@ -6,6 +6,7 @@ from .models import (
     ServiceUrls, LoginHistory, ActivityLog, PasswordHistory, NotificationLog,
     UserNotificationPreference
 )
+from .logger import setup_logger, set_logging_context, generate_request_id, get_logging_context
 
 __all__ = [
     'get_db', 'Database', 'User', 'Tenant', 'UserRole', 'Permission',
@@ -13,5 +14,9 @@ __all__ = [
     'RateLimitSettings', 'LoggingSettings', 'SystemSettings', 'SiteSettings',
     'TenantSystemSettings', 'InfrastructureSettings', 'ServiceUrls',
     'LoginHistory', 'ActivityLog', 'PasswordHistory', 'NotificationLog',
-    'UserNotificationPreference'
+    'UserNotificationPreference',
+    'setup_logger',
+    'set_logging_context',
+    'generate_request_id',
+    'get_logging_context'
 ]
