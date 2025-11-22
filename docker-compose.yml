@@ -1,79 +1,34 @@
 services:
-  api-gateway:
+  auth-service:
     build:
-      context: .  # Root directory
-      dockerfile: backend/apigateway/Dockerfile
-    container_name: pavitra_gateway
-    ports:
-      - "8080:8080"
-    env_file:
-      - .env
-    depends_on:
-      - auth
-      - rabbitmq
-    networks:
-      - pavitra-network
-
-  auth:
-    build:
-      context: .  # Root directory
-      dockerfile: backend/auth/Dockerfile
-    container_name: pavitra_auth
+      context: ./backend
+      dockerfile: auth-service/Dockerfile
     ports:
       - "8000:8000"
-    env_file:
-      - .env
-    depends_on:
-      - postgres
-      - redis
-      - rabbitmq
-    networks:
-      - pavitra-network
-
-  postgres:
-    image: postgres:17
-    container_name: pavitra_postgres
     environment:
-      POSTGRES_DB: ${POSTGRES_DB}
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      PGDATA: ${PGDATA}
-      POSTGRES_INITDB_ARGS: ${POSTGRES_INITDB_ARGS}
-    ports:
-      - "5432:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-      - ./init-scripts:/docker-entrypoint-initdb.d
+      - DATABASE_URL=postgresql://admin:admin123@postgres:5432/pavitra_db
+      - REDIS_URL=redis://redis:6379
+      - AUTH_SERVICE_HOST=0.0.0.0
+      - AUTH_SERVICE_PORT=8000
     networks:
-      - pavitra-network
+      - microservices-network
+    restart: unless-stopped
 
-  redis:
-    image: redis:7.2-alpine
-    container_name: pavitra_redis
+  api-gateway:
+    build:
+      context: ./backend
+      dockerfile: api-gateway/Dockerfile
     ports:
-      - "6379:6379"
-    networks:
-      - pavitra-network
-
-  rabbitmq:
-    image: rabbitmq:3.13-management
-    container_name: pavitra_rabbitmq
+      - "8080:8080"
     environment:
-      RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER}
-      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS}
-      RABBITMQ_DEFAULT_VHOST: ${RABBITMQ_DEFAULT_VHOST}
-    ports:
-      - "5672:5672"   # AMQP protocol
-      - "15672:15672" # Management UI
-    volumes:
-      - rabbitmq_data:/var/lib/rabbitmq
+      - AUTH_SERVICE_URL=http://auth-service:8000
+      - API_GATEWAY_HOST=0.0.0.0
+      - API_GATEWAY_PORT=8080
     networks:
-      - pavitra-network
-
-volumes:
-  postgres_data:
-  rabbitmq_data:
+      - microservices-network
+    restart: unless-stopped
 
 networks:
-  pavitra-network:
-    driver: bridge
+  microservices-network:
+    external: true
+    name: microservices-network

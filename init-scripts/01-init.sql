@@ -86,14 +86,14 @@ CREATE TABLE tenants (
 CREATE TABLE users (
     id BIGSERIAL PRIMARY KEY,
     tenant_id BIGINT REFERENCES tenants(id) ON DELETE SET NULL,
+    username VARCHAR(100) UNIQUE
     first_name VARCHAR(100) NOT NULL,
     last_name VARCHAR(100) NOT NULL,
     email VARCHAR(255) NOT NULL UNIQUE,
     phone VARCHAR(20),
     password_hash VARCHAR(255) NOT NULL,
     telegram_username VARCHAR(100),
-    telegram_phone VARCHAR(20),
-    whatsapp_phone VARCHAR(20),
+    additional_phone VARCHAR(20),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -865,6 +865,7 @@ CREATE TABLE login_history (
     login_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     logout_time TIMESTAMP,
     ip_address INET,
+    attempted_email VARCHAR(255),
     device_info JSONB,
     status VARCHAR(20) DEFAULT 'success'
 );
@@ -1043,8 +1044,8 @@ INSERT INTO role_permissions (role_id, permission_id) VALUES
 ON CONFLICT (role_id, permission_id) DO NOTHING;
 
 -- Create default super admin user (password: admin123)
-INSERT INTO users (id, tenant_id, first_name, last_name, email, password_hash) VALUES
-(1, 1, 'System', 'Administrator', 'admin@pavitra.shop', '$2b$12$LQv3c1yqBWVHxkd0L9kZnOrBbESMHp5sMo8LaSMa7ZQYeJV.YFqJK')
+INSERT INTO users (id, tenant_id, username, first_name, last_name, email, password_hash) VALUES
+(1, 1, 'admin', 'System', 'Administrator', 'admin@pavitra.shop', '$argon2id$v=19$m=65536,t=3,p=4$c29tZXNhbHQ$RdescudvJCsgt3ub+bxdWRhLLqn1n2JMhyVJ+L0mx4Y')
 ON CONFLICT (id) DO NOTHING;
 
 -- Assign super admin role to default user
@@ -1069,8 +1070,6 @@ INSERT INTO system_settings (setting_key, setting_value, setting_type) VALUES
 ('max_page_size', '100', 'integer'),
 ('cache_default_ttl', '300', 'integer')
 ON CONFLICT (setting_key) DO NOTHING;
-
-
 
 -- =====================================================
 -- DATABASE USER CREATION (ADD AT THE TOP AFTER EXTENSIONS)
