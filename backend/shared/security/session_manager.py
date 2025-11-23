@@ -61,7 +61,6 @@ class SessionManager:
             custom_data=custom_data or {}
         )
         
-        # Store session in Redis
         session_key = f"session:{session_id}"
         self.redis.setex(
             session_key,
@@ -69,10 +68,9 @@ class SessionManager:
             session_data.json()
         )
         
-        # Store user sessions reference
         user_sessions_key = f"user_sessions:{user_id}:{tenant_id}"
         self.redis.sadd(user_sessions_key, session_id)
-        self.redis.expire(user_sessions_key, self.default_ttl * 24)  # Keep for 24 hours
+        self.redis.expire(user_sessions_key, self.default_ttl * 24)
         
         self.logger.info(
             "Session created",
@@ -89,18 +87,16 @@ class SessionManager:
         try:
             session_key = f"session:{session_id}"
             session_json = self.redis.get(session_key)
-            
             if not session_json:
                 return None
-            
+                
             session_data = SessionData.parse_raw(session_json)
             
-            # Check if session is expired
             if time.time() > session_data.expires_at:
                 self.delete_session(session_id)
                 return None
             
-            # Update last accessed time (sliding expiration)
+            # Update last accessed time
             session_data.last_accessed = time.time()
             session_data.expires_at = session_data.last_accessed + self.default_ttl
             
@@ -111,7 +107,6 @@ class SessionManager:
             )
             
             return session_data
-            
         except Exception as e:
             self.logger.error(f"Error getting session: {e}")
             return None
@@ -120,15 +115,10 @@ class SessionManager:
         try:
             session_key = f"session:{session_id}"
             session_json = self.redis.get(session_key)
-            
             if session_json:
                 session_data = SessionData.parse_raw(session_json)
                 user_sessions_key = f"user_sessions:{session_data.user_id}:{session_data.tenant_id}"
-                
-                # Remove session from user's sessions
                 self.redis.srem(user_sessions_key, session_id)
-                
-                # Delete session data
                 self.redis.delete(session_key)
                 
                 self.logger.info(
@@ -138,11 +128,8 @@ class SessionManager:
                         "user_id": session_data.user_id
                     }
                 )
-                
                 return True
-            
             return False
-            
         except Exception as e:
             self.logger.error(f"Error deleting session: {e}")
             return False
@@ -151,20 +138,21 @@ class SessionManager:
         try:
             user_sessions_key = f"user_sessions:{user_id}:{tenant_id}"
             session_ids = self.redis.smembers(user_sessions_key)
+            sessions_deleted = 0
             
             for session_id in session_ids:
                 if session_id != exclude_session:
-                    self.delete_session(session_id)
+                    if self.delete_session(session_id):
+                        sessions_deleted += 1
             
             self.logger.info(
-                "All user sessions deleted",
+                "User sessions deleted",
                 extra={
                     "user_id": user_id,
                     "tenant_id": tenant_id,
-                    "sessions_terminated": len(session_ids) - (1 if exclude_session else 0)
+                    "sessions_deleted": sessions_deleted
                 }
             )
-            
         except Exception as e:
             self.logger.error(f"Error deleting user sessions: {e}")
 
@@ -172,24 +160,20 @@ class SessionManager:
         try:
             user_sessions_key = f"user_sessions:{user_id}:{tenant_id}"
             session_ids = self.redis.smembers(user_sessions_key)
-            
             active_sessions = []
+            
             for session_id in session_ids:
                 session_data = self.get_session(session_id)
                 if session_data:
                     active_sessions.append(session_data)
-            
+                    
             return active_sessions
-            
         except Exception as e:
             self.logger.error(f"Error getting active sessions: {e}")
             return []
 
     def cleanup_expired_sessions(self):
         try:
-            # This would typically be run as a background task
-            # For now, we rely on Redis TTL
             self.logger.info("Session cleanup completed (handled by Redis TTL)")
-            
         except Exception as e:
             self.logger.error(f"Error cleaning up expired sessions: {e}")

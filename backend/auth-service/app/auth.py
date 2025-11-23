@@ -40,7 +40,13 @@ class AuthService:
     def get_tenant_security_config(self, tenant_id: int) -> Dict[str, Any]:
         security_settings = self.tenant_repo.get_tenant_security_settings(tenant_id)
         if not security_settings:
-            raise ValueError(f"Security settings not found for tenant {tenant_id}")
+            # Fallback to default security settings
+            return {
+                "jwt_secret_key": "your-super-secure-jwt-secret-key-change-in-production-64-chars-minimum",
+                "jwt_algorithm": "HS256",
+                "access_token_expiry_minutes": 30,
+                "refresh_token_expiry_days": 7
+            }
         return {
             "jwt_secret_key": security_settings.jwt_secret_key,
             "jwt_algorithm": security_settings.jwt_algorithm,
@@ -124,6 +130,11 @@ class AuthService:
 
     def verify_token(self, token: str, tenant_id: int) -> Optional[TokenData]:
         try:
+            # Check if token is revoked
+            revoked_key = f"revoked_token:{token}"
+            if self.redis_client.exists(revoked_key):
+                return None
+                
             security_config = self.get_tenant_security_config(tenant_id)
             payload = jwt.decode(
                 token,
@@ -137,12 +148,6 @@ class AuthService:
             if token_type not in ["access", "refresh"]:
                 return None
             
-            # Check if token is revoked
-            if token_type == "access":
-                token_key = f"revoked_token:{token}"
-                if self.redis_client.exists(token_key):
-                    return None
-                    
             return TokenData(
                 user_id=payload.get("user_id"),
                 tenant_id=payload.get("tenant_id", tenant_id),
@@ -165,7 +170,6 @@ class AuthService:
         access_token = self.create_access_token(token_data, tenant_id)
         refresh_token = self.create_refresh_token(token_data, tenant_id)
         
-        # Store refresh token
         refresh_key = f"refresh_token:{user_data['id']}:{tenant_id}"
         self.redis_client.setex(
             refresh_key,
@@ -173,11 +177,10 @@ class AuthService:
             refresh_token
         )
         
-        # Create session if request context is available
         if request:
             user_agent = request.headers.get("user-agent")
             client_ip = request.client.host if request.client else None
-            session_data = self.session_manager.create_session(
+            self.session_manager.create_session(
                 user_id=user_data["id"],
                 tenant_id=tenant_id,
                 user_agent=user_agent,
@@ -185,7 +188,7 @@ class AuthService:
                 roles=user_data["roles"],
                 permissions=user_data["permissions"]
             )
-        
+            
         return Token(
             access_token=access_token,
             refresh_token=refresh_token,
@@ -202,7 +205,6 @@ class AuthService:
         self.redis_client.delete(refresh_key)
 
     def revoke_access_token(self, token: str, expires_in: int = 3600):
-        """Revoke access token by storing it in Redis with TTL"""
         token_key = f"revoked_token:{token}"
         self.redis_client.setex(token_key, expires_in, "revoked")
 
@@ -217,17 +219,10 @@ class AuthService:
         return token_data
 
     async def logout_user(self, user_id: int, tenant_id: int, access_token: str = None):
-        """Complete logout - revoke tokens and delete sessions"""
-        # Revoke refresh token
         self.revoke_refresh_token(user_id, tenant_id)
-        
-        # Revoke access token if provided
         if access_token:
             self.revoke_access_token(access_token)
-            
-        # Delete all user sessions
-        await self.session_manager.delete_user_sessions(user_id, tenant_id)
+        self.session_manager.delete_user_sessions(user_id, tenant_id)
 
     async def get_user_sessions(self, user_id: int, tenant_id: int):
-        """Get active sessions for user"""
         return self.session_manager.get_active_user_sessions(user_id, tenant_id)

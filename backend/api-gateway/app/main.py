@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Request, Depends, HTTPException
+from fastapi import FastAPI, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from .config import settings
 from .auth_client import AuthClient
@@ -14,25 +14,15 @@ def create_app():
         description="Main API Gateway for E-Commerce Platform",
         version="1.0.0"
     )
-
-    # Update logger with database configuration - MUST happen after settings are loaded
+    
     setup_logger("api-gateway", level=settings_instance.LOG_LEVEL)
     
-    auth_client = AuthClient(settings_instance.AUTH_SERVICE_URL)
-    app.add_middleware(AuthenticationMiddleware, auth_client=auth_client)
-
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=settings_instance.CORS_ORIGINS,
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
-
+    # Function middleware FIRST (runs first, ends last)
     @app.middleware("http")
     async def log_requests(request: Request, call_next):
         request_id = generate_request_id()
         set_logging_context(request_id=request_id)
+        
         api_gateway_logger.info(
             "Request started",
             extra={
@@ -41,6 +31,7 @@ def create_app():
                 "client_ip": request.client.host
             }
         )
+        
         try:
             response = await call_next(request)
             api_gateway_logger.info(
@@ -64,6 +55,19 @@ def create_app():
             )
             raise
 
+    # Class-based middleware SECOND (runs after function middleware)
+    auth_client = AuthClient(settings_instance.AUTH_SERVICE_URL)
+    app.add_middleware(AuthenticationMiddleware, auth_client=auth_client)
+    
+    # CORS middleware LAST
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings_instance.CORS_ORIGINS,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
     @app.get("/")
     async def root():
         api_gateway_logger.info("Root endpoint accessed")
@@ -74,7 +78,6 @@ def create_app():
         api_gateway_logger.info("Health check performed")
         return {"status": "healthy", "service": "api-gateway"}
 
-    # Auth routes
     @app.post("/api/v1/auth/register")
     async def register(request: Request):
         api_gateway_logger.info("Register route called")
@@ -98,12 +101,9 @@ def create_app():
                     headers=request.headers
                 )
                 api_gateway_logger.info("Login request forwarded to auth service")
-
-                # Handle non-JSON responses gracefully
                 if response.status_code != 200:
                     api_gateway_logger.error(f"Auth service returned error: {response.status_code} - {response.text}")
                     return {"error": "Authentication service unavailable", "status_code": response.status_code}
-
                 return response.json()
             except Exception as e:
                 api_gateway_logger.error(f"Error calling auth service: {e}")
@@ -129,6 +129,8 @@ def create_app():
                 content=await request.body(),
                 headers=request.headers
             )
+            if response.status_code == 200:
+                return {"message": "Successfully logged out"}
             return response.json()
 
     @app.post("/api/v1/auth/verify")
@@ -153,22 +155,28 @@ def create_app():
             api_gateway_logger.info("Admin management request forwarded")
             return response.json()
 
-    # Protected route example
     @app.get("/api/v1/protected")
     async def protected_route(request: Request, tenant_id: int = Depends(get_tenant_id)):
+        # Safely access user data from middleware
+        user_data = getattr(request.state, 'user', {})
+        user_id = user_data.get("user_id")
+        tenant_id = user_data.get("tenant_id", tenant_id)
+        roles = user_data.get("roles", [])
+        
         api_gateway_logger.info(
             "Protected route accessed",
             extra={
-                "user_id": request.state.user_id,
-                "tenant_id": request.state.tenant_id,
-                "roles": request.state.roles
+                "user_id": user_id,
+                "tenant_id": tenant_id,
+                "roles": roles
             }
         )
+        
         return {
             "message": "This is a protected route",
-            "user_id": request.state.user_id,
-            "tenant_id": request.state.tenant_id,
-            "roles": request.state.roles
+            "user_id": user_id,
+            "tenant_id": tenant_id,
+            "roles": roles
         }
 
     return app

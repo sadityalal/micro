@@ -1,31 +1,42 @@
 import httpx
 from typing import Optional, Dict, Any
+from shared.logger import api_gateway_logger
+from shared.database.connection import get_redis
+import redis
 
 class AuthClient:
     def __init__(self, base_url: str):
         self.base_url = base_url
-        self.client = httpx.AsyncClient(base_url=base_url)
+        self.client = httpx.AsyncClient(base_url=base_url, timeout=30.0)
+        self.redis_client = get_redis()
+        api_gateway_logger.info("AuthClient initialized")
 
     async def verify_token(self, token: str, tenant_id: Optional[int] = None) -> Optional[Dict[str, Any]]:
         try:
+            # First check if token is revoked in Redis
+            revoked_key = f"revoked_token:{token}"
+            if self.redis_client.exists(revoked_key):
+                api_gateway_logger.warning("Token is revoked, rejecting request")
+                return None
+            
+            api_gateway_logger.debug("Verifying token with auth service", extra={"tenant_id": tenant_id})
+            
             response = await self.client.post(
                 "/api/v1/auth/verify",
-                json={"token": token, "tenant_id": tenant_id or 1}  # Ensure tenant_id is provided
+                json={"token": token, "tenant_id": tenant_id or 1},
+                timeout=10.0
             )
+            
             if response.status_code == 200:
+                api_gateway_logger.debug("Token verification successful")
                 return response.json()
-            print(f"Verify token failed: {response.status_code} - {response.text}")  # Debug
+            
+            api_gateway_logger.warning(f"Verify token failed: {response.status_code}")
             return None
+            
         except Exception as e:
-            print(f"Auth client error: {e}")  # Debug
+            api_gateway_logger.error(f"Auth client error: {e}")
             return None
 
-    async def get_user_permissions(self, token: str) -> Optional[Dict[str, Any]]:
-        try:
-            headers = {"Authorization": f"Bearer {token}"}
-            response = await self.client.get("/api/v1/auth/me", headers=headers)
-            if response.status_code == 200:
-                return response.json()
-            return None
-        except Exception:
-            return None
+    async def close(self):
+        await self.client.aclose()
