@@ -1,19 +1,31 @@
-from fastapi import FastAPI, Depends
+from fastapi import FastAPI, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from .config import settings
 from .endpoints import router as auth_router
-from shared.database.connection import get_db
+from shared.database.connection import DatabaseManager
 from shared.logger import auth_service_logger, set_logging_context, generate_request_id
 
 
 def create_app():
-    settings_instance = settings
-
     app = FastAPI(
         title="Auth Service",
         description="Authentication and Authorization Microservice",
         version="1.0.0"
     )
+
+    # Initialize database before loading settings
+    db_manager = DatabaseManager()
+    try:
+        # This will use the URLs from the database config
+        db_url = settings.DATABASE_URL
+        redis_url = settings.REDIS_URL
+        db_manager.initialize(db_url, redis_url)
+    except Exception as e:
+        auth_service_logger.error(f"Failed to initialize database: {e}")
+        raise
+
+    # Rest of your app setup...
+    settings_instance = settings
 
     app.add_middleware(
         CORSMiddleware,

@@ -1,30 +1,60 @@
 from sqlalchemy import create_engine
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import sessionmaker, Session
+from sqlalchemy.pool import QueuePool
 from contextlib import contextmanager
 import redis
-import os
+from typing import Generator
+import threading
 
 
-class Database:
+class DatabaseManager:
+    _instances = {}
+    _lock = threading.Lock()
+
+    def __new__(cls, tenant_id: int = 1):
+        with cls._lock:
+            if tenant_id not in cls._instances:
+                instance = super().__new__(cls)
+                instance.initialized = False
+                cls._instances[tenant_id] = instance
+            return cls._instances[tenant_id]
+
     def __init__(self, tenant_id: int = 1):
         self.tenant_id = tenant_id
-        self.engine = None
-        self.SessionLocal = None
-        self.redis_client = None
+        if not hasattr(self, 'initialized'):
+            self.initialized = False
 
     def initialize(self, database_url: str, redis_url: str):
-        if self.engine is None:
-            self.engine = create_engine(database_url)
-            self.SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=self.engine)
-            self.redis_client = redis.from_url(redis_url)
+        if not self.initialized:
+            self.engine = create_engine(
+                database_url,
+                poolclass=QueuePool,
+                pool_size=10,
+                max_overflow=20,
+                pool_pre_ping=True,
+                pool_recycle=3600,
+                echo=False
+            )
+
+            self.SessionLocal = sessionmaker(
+                autocommit=False,
+                autoflush=False,
+                bind=self.engine
+            )
+
+            self.redis_pool = redis.ConnectionPool.from_url(
+                redis_url,
+                max_connections=20,
+                decode_responses=True
+            )
+
+            self.initialized = True
 
     @contextmanager
-    def get_session(self):
-        if self.engine is None:
-            database_url = os.getenv("DATABASE_URL", "postgresql://admin:admin123@postgres:5432/pavitra_db")
-            redis_url = os.getenv("REDIS_URL", "redis://redis:6379")
-            self.initialize(database_url, redis_url)
+    def get_session(self) -> Generator[Session, None, None]:
+        if not self.initialized:
+            raise RuntimeError("Database not initialized. Call initialize() first.")
 
         session = self.SessionLocal()
         try:
@@ -36,22 +66,21 @@ class Database:
         finally:
             session.close()
 
-    def get_redis(self):
-        if self.redis_client is None:
-            redis_url = os.getenv("REDIS_URL", "redis://redis:6379")
-            self.redis_client = redis.from_url(redis_url)
-        return self.redis_client
+    def get_redis(self) -> redis.Redis:
+        if not self.initialized:
+            raise RuntimeError("Database not initialized. Call initialize() first.")
+        return redis.Redis(connection_pool=self.redis_pool)
 
 
-def get_db(tenant_id: int = 1):
-    db = Database(tenant_id=tenant_id)
-    with db.get_session() as session:
+def get_db(tenant_id: int = 1) -> Generator[Session, None, None]:
+    db_manager = DatabaseManager(tenant_id)
+    with db_manager.get_session() as session:
         yield session
 
 
-def get_redis(tenant_id: int = 1):
-    db = Database(tenant_id=tenant_id)
-    return db.get_redis()
+def get_redis(tenant_id: int = 1) -> redis.Redis:
+    db_manager = DatabaseManager(tenant_id)
+    return db_manager.get_redis()
 
 
 Base = declarative_base()

@@ -1,9 +1,16 @@
 import logging
 import sys
 import os
-from typing import Optional
 import json
 from datetime import datetime
+from contextvars import ContextVar
+from typing import Optional, Dict, Any
+import uuid
+
+# Context variables for request tracking
+request_id_var: ContextVar[Optional[str]] = ContextVar('request_id', default=None)
+user_id_var: ContextVar[Optional[str]] = ContextVar('user_id', default=None)
+tenant_id_var: ContextVar[Optional[str]] = ContextVar('tenant_id', default=None)
 
 
 class JSONFormatter(logging.Formatter):
@@ -18,13 +25,17 @@ class JSONFormatter(logging.Formatter):
             "line": record.lineno
         }
 
-        # Add context if available
-        if hasattr(record, 'request_id'):
-            log_entry["request_id"] = record.request_id
-        if hasattr(record, 'user_id'):
-            log_entry["user_id"] = record.user_id
-        if hasattr(record, 'tenant_id'):
-            log_entry["tenant_id"] = record.tenant_id
+        # Add context information
+        request_id = request_id_var.get()
+        user_id = user_id_var.get()
+        tenant_id = tenant_id_var.get()
+
+        if request_id:
+            log_entry["request_id"] = request_id
+        if user_id:
+            log_entry["user_id"] = user_id
+        if tenant_id:
+            log_entry["tenant_id"] = tenant_id
 
         if record.exc_info:
             log_entry["exception"] = self.formatException(record.exc_info)
@@ -32,97 +43,79 @@ class JSONFormatter(logging.Formatter):
         return json.dumps(log_entry)
 
 
-def get_log_level_from_config() -> int:
-    """Get log level from database configuration"""
-    try:
-        from shared.database.connection import get_db
-        from shared.database.config_service import db_config_service
+class ContextFilter(logging.Filter):
+    def filter(self, record):
+        request_id = request_id_var.get()
+        user_id = user_id_var.get()
+        tenant_id = tenant_id_var.get()
 
-        db_gen = get_db()
-        db_session = next(db_gen)
-        try:
-            config = db_config_service.get_tenant_config(db_session, 1)  # Default tenant
-            log_level_str = config["logging"]["log_level"].upper()
+        if request_id:
+            record.request_id = request_id
+        if user_id:
+            record.user_id = user_id
+        if tenant_id:
+            record.tenant_id = tenant_id
 
-            log_levels = {
-                "DEBUG": logging.DEBUG,
-                "INFO": logging.INFO,
-                "WARNING": logging.WARNING,
-                "ERROR": logging.ERROR,
-                "CRITICAL": logging.CRITICAL
-            }
-
-            return log_levels.get(log_level_str, logging.INFO)
-
-        finally:
-            try:
-                next(db_gen)
-            except StopIteration:
-                pass
-
-    except Exception as e:
-        # Fallback if database not available
-        print(f"Failed to get log level from database: {e}")
-        return logging.INFO
+        return True
 
 
-def setup_logger(
-        name: str,
-        level: Optional[int] = None,
-        format: str = "json",
-        extra_handlers: Optional[list] = None
-) -> logging.Logger:
+def set_logging_context(
+        request_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+        tenant_id: Optional[str] = None
+):
+    if request_id:
+        request_id_var.set(request_id)
+    if user_id:
+        user_id_var.set(user_id)
+    if tenant_id:
+        tenant_id_var.set(tenant_id)
+
+
+def generate_request_id() -> str:
+    return f"req_{uuid.uuid4().hex[:8]}"
+
+
+def get_logging_context() -> Dict[str, Any]:
+    return {
+        "request_id": request_id_var.get(),
+        "user_id": user_id_var.get(),
+        "tenant_id": tenant_id_var.get()
+    }
+
+
+def setup_logger(name: str, level: int = logging.INFO) -> logging.Logger:
     logger = logging.getLogger(name)
 
     if logger.handlers:
         return logger
 
-    # Get log level from database, fallback to INFO
-    if level is None:
-        level = get_log_level_from_config()
-
     logger.setLevel(level)
 
-    # Log to root project directory
+    # Create logs directory
     project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../"))
     logs_dir = os.path.join(project_root, "logs")
-
-    # Use logger name for log file
-    log_file = os.path.join(logs_dir, f"{name}.log")
-
-    # Ensure log directory exists
     os.makedirs(logs_dir, exist_ok=True)
 
-    # File handler for service-specific logs
+    log_file = os.path.join(logs_dir, f"{name}.log")
+
+    # File handler
     file_handler = logging.FileHandler(log_file)
+    file_handler.setFormatter(JSONFormatter())
+    file_handler.addFilter(ContextFilter())
 
-    # Console handler for all logs
+    # Console handler
     console_handler = logging.StreamHandler(sys.stdout)
-
-    if format == "json":
-        formatter = JSONFormatter()
-    else:
-        formatter = logging.Formatter(
-            '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-        )
-
-    file_handler.setFormatter(formatter)
-    console_handler.setFormatter(formatter)
+    console_handler.setFormatter(JSONFormatter())
+    console_handler.addFilter(ContextFilter())
 
     logger.addHandler(file_handler)
     logger.addHandler(console_handler)
-
-    if extra_handlers:
-        for handler in extra_handlers:
-            handler.setFormatter(formatter)
-            logger.addHandler(handler)
-
     logger.propagate = False
 
-    logger.info(f"Logger initialized with level: {logging.getLevelName(level)}")
     return logger
 
 
-# Service-specific loggers
+# Create loggers
 api_gateway_logger = setup_logger("api-gateway")
 auth_service_logger = setup_logger("auth-service")
