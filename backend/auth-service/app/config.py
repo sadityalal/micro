@@ -1,12 +1,13 @@
 from shared.database.config_service import db_config_service
-
+from shared.database.connection import initialize_databases
 
 class Settings:
     def __init__(self, tenant_id: int = 1):
         self.tenant_id = tenant_id
+        # Initialize database before any property access
+        initialize_databases()
 
     def _get_db_session(self):
-        """Get database session - will fail if DB not ready"""
         from shared.database.connection import get_db
         db_gen = get_db(self.tenant_id)
         db_session = next(db_gen)
@@ -125,6 +126,5 @@ class Settings:
                 next(db_gen)
             except StopIteration:
                 pass
-
 
 settings = Settings()

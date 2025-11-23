@@ -48,6 +48,9 @@ class TenantRepository:
                 "service_type": setting.service_type,
                 "host": setting.host,
                 "port": setting.port,
+                "username": setting.username,
+                "password": setting.password,
+                "database_name": setting.database_name,
                 "status": setting.status.value
             }
             for setting in settings

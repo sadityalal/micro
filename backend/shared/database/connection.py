@@ -6,6 +6,7 @@ from contextlib import contextmanager
 import redis
 from typing import Generator
 import threading
+import os
 
 
 class DatabaseManager:
@@ -16,19 +17,20 @@ class DatabaseManager:
         with cls._lock:
             if tenant_id not in cls._instances:
                 instance = super().__new__(cls)
+                instance.tenant_id = tenant_id
                 instance.initialized = False
                 cls._instances[tenant_id] = instance
             return cls._instances[tenant_id]
 
-    def __init__(self, tenant_id: int = 1):
-        self.tenant_id = tenant_id
-        if not hasattr(self, 'initialized'):
-            self.initialized = False
-
-    def initialize(self, database_url: str, redis_url: str):
+    def initialize(self, database_url: str = None, redis_url: str = None):
+        """Initialize with URLs or use environment variables as fallback"""
         if not self.initialized:
+            # Use provided URLs or fall back to environment variables
+            db_url = database_url or os.getenv("DATABASE_URL", "postgresql://admin:admin123@postgres:5432/pavitra_db")
+            redis_url = redis_url or os.getenv("REDIS_URL", "redis://redis:6379/0")
+
             self.engine = create_engine(
-                database_url,
+                db_url,
                 poolclass=QueuePool,
                 pool_size=10,
                 max_overflow=20,
@@ -36,25 +38,23 @@ class DatabaseManager:
                 pool_recycle=3600,
                 echo=False
             )
-
             self.SessionLocal = sessionmaker(
                 autocommit=False,
                 autoflush=False,
                 bind=self.engine
             )
-
             self.redis_pool = redis.ConnectionPool.from_url(
                 redis_url,
                 max_connections=20,
                 decode_responses=True
             )
-
             self.initialized = True
 
     @contextmanager
     def get_session(self) -> Generator[Session, None, None]:
         if not self.initialized:
-            raise RuntimeError("Database not initialized. Call initialize() first.")
+            # Auto-initialize if not already done
+            self.initialize()
 
         session = self.SessionLocal()
         try:
@@ -68,8 +68,18 @@ class DatabaseManager:
 
     def get_redis(self) -> redis.Redis:
         if not self.initialized:
-            raise RuntimeError("Database not initialized. Call initialize() first.")
+            # Auto-initialize if not already done
+            self.initialize()
         return redis.Redis(connection_pool=self.redis_pool)
+
+
+# Global database manager instance for default tenant
+_default_db_manager = DatabaseManager(1)
+
+
+def initialize_databases():
+    """Explicitly initialize databases at application startup"""
+    _default_db_manager.initialize()
 
 
 def get_db(tenant_id: int = 1) -> Generator[Session, None, None]:

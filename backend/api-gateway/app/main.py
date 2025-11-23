@@ -96,13 +96,23 @@ def create_app():
     async def login(request: Request):
         api_gateway_logger.info("Login route called")
         async with httpx.AsyncClient() as client:
-            response = await client.post(
-                f"{settings_instance.AUTH_SERVICE_URL}/api/v1/auth/login",
-                content=await request.body(),
-                headers=request.headers
-            )
-            api_gateway_logger.info("Login request forwarded to auth service")
-            return response.json()
+            try:
+                response = await client.post(
+                    f"{settings_instance.AUTH_SERVICE_URL}/api/v1/auth/login",
+                    content=await request.body(),
+                    headers=request.headers
+                )
+                api_gateway_logger.info("Login request forwarded to auth service")
+
+                # Handle non-JSON responses gracefully
+                if response.status_code != 200:
+                    api_gateway_logger.error(f"Auth service returned error: {response.status_code} - {response.text}")
+                    return {"error": "Authentication service unavailable", "status_code": response.status_code}
+
+                return response.json()
+            except Exception as e:
+                api_gateway_logger.error(f"Error calling auth service: {e}")
+                return {"error": "Authentication service unavailable", "status_code": 503}
 
     @app.post("/api/v1/auth/refresh")
     async def refresh_token(request: Request):

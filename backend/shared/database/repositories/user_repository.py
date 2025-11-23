@@ -28,6 +28,12 @@ class UserRepository:
             query = query.filter(User.tenant_id == tenant_id)
         return query.first()
 
+    def get_user_by_additional_phone(self, phone: str, tenant_id: Optional[int] = None) -> Optional[User]:
+        query = self.db.query(User).filter(User.additional_phone == phone)
+        if tenant_id:
+            query = query.filter(User.tenant_id == tenant_id)
+        return query.first()
+
     def get_user_by_id(self, user_id: int) -> Optional[User]:
         return self.db.query(User).filter(User.id == user_id).first()
 

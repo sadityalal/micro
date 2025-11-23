@@ -123,25 +123,42 @@ class DatabaseConfigService:
         return ""
 
     def get_database_url(self, db_session, tenant_id: int) -> str:
-        """Get database URL for a tenant"""
         from shared.database.repositories.tenant_repository import TenantRepository
         tenant_repo = TenantRepository(db_session)
         infra_settings = tenant_repo.get_infrastructure_settings(tenant_id)
 
         for setting in infra_settings:
-            if setting.service_type == 'postgresql':
-                return f"postgresql://{setting.username}:{setting.password}@{setting.host}:{setting.port}/{setting.database_name}"
+            # setting is already a dictionary from get_infrastructure_settings
+            if setting.get('service_type') == 'postgresql':
+                username = setting.get('username', '')
+                password = setting.get('password', '')
+                host = setting.get('host', '')
+                port = setting.get('port', 5432)
+                database_name = setting.get('database_name', '')
+
+                if username and password:
+                    return f"postgresql://{username}:{password}@{host}:{port}/{database_name}"
+                else:
+                    return f"postgresql://{host}:{port}/{database_name}"
+
+        # Fallback to direct connection if not found in settings
         return ""
 
     def get_redis_url(self, db_session, tenant_id: int) -> str:
-        """Get Redis URL for a tenant"""
         from shared.database.repositories.tenant_repository import TenantRepository
         tenant_repo = TenantRepository(db_session)
         infra_settings = tenant_repo.get_infrastructure_settings(tenant_id)
 
         for setting in infra_settings:
-            if setting.service_type == 'redis':
-                return f"redis://{setting.host}:{setting.port}/{setting.database_name}"
+            # setting is already a dictionary from get_infrastructure_settings
+            if setting.get('service_type') == 'redis':
+                host = setting.get('host', 'redis')
+                port = setting.get('port', 6379)
+                database_name = setting.get('database_name', '0')
+
+                return f"redis://{host}:{port}/{database_name}"
+
+        # Fallback to direct connection if not found in settings
         return ""
 
     def get_service_config(self, db_session, tenant_id: int, service_name: str) -> Dict[str, Any]:

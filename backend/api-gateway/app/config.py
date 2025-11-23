@@ -1,10 +1,12 @@
 from typing import List
 from shared.database.config_service import db_config_service
-
+from shared.database.connection import initialize_databases
 
 class Settings:
     def __init__(self, tenant_id: int = 1):
         self.tenant_id = tenant_id
+        # Initialize database before any property access
+        initialize_databases()
 
     @property
     def API_GATEWAY_HOST(self) -> str:
@@ -120,6 +122,5 @@ class Settings:
                 next(db_gen)
             except StopIteration:
                 pass
-
 
 settings = Settings()
