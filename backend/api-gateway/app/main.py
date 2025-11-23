@@ -3,22 +3,22 @@ from fastapi.middleware.cors import CORSMiddleware
 from .config import settings
 from .auth_client import AuthClient
 from .middleware import AuthenticationMiddleware, get_tenant_id
-from shared.logger import api_gateway_logger, set_logging_context, generate_request_id
+from shared.logger import api_gateway_logger, set_logging_context, generate_request_id, setup_logger
 import httpx
 import json
 
-
 def create_app():
     settings_instance = settings
-
     app = FastAPI(
         title="API Gateway",
         description="Main API Gateway for E-Commerce Platform",
         version="1.0.0"
     )
 
+    # Update logger with database configuration - MUST happen after settings are loaded
+    setup_logger("api-gateway", level=settings_instance.LOG_LEVEL)
+    
     auth_client = AuthClient(settings_instance.AUTH_SERVICE_URL)
-
     app.add_middleware(AuthenticationMiddleware, auth_client=auth_client)
 
     app.add_middleware(
@@ -33,7 +33,6 @@ def create_app():
     async def log_requests(request: Request, call_next):
         request_id = generate_request_id()
         set_logging_context(request_id=request_id)
-
         api_gateway_logger.info(
             "Request started",
             extra={
@@ -42,10 +41,8 @@ def create_app():
                 "client_ip": request.client.host
             }
         )
-
         try:
             response = await call_next(request)
-
             api_gateway_logger.info(
                 "Request completed",
                 extra={
@@ -54,9 +51,7 @@ def create_app():
                     "status_code": response.status_code
                 }
             )
-
             return response
-
         except Exception as e:
             api_gateway_logger.error(
                 "Request failed",
@@ -178,12 +173,10 @@ def create_app():
 
     return app
 
-
 app = create_app()
 
 if __name__ == "__main__":
     import uvicorn
-
     api_gateway_logger.info("Starting API Gateway")
     uvicorn.run(
         "main:app",

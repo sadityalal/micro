@@ -2,9 +2,9 @@ from fastapi import FastAPI, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from .config import settings
 from .endpoints import router as auth_router
+from .admin_endpoints import router as admin_router
 from shared.database.connection import DatabaseManager
-from shared.logger import auth_service_logger, set_logging_context, generate_request_id
-
+from shared.logger import auth_service_logger, set_logging_context, generate_request_id, setup_logger
 
 def create_app():
     app = FastAPI(
@@ -13,18 +13,18 @@ def create_app():
         version="1.0.0"
     )
 
-    # Initialize database before loading settings
     db_manager = DatabaseManager()
     try:
-        # This will use the URLs from the database config
         db_url = settings.DATABASE_URL
         redis_url = settings.REDIS_URL
         db_manager.initialize(db_url, redis_url)
     except Exception as e:
-        auth_service_logger.error(f"Failed to initialize database: {e}")
+        print(f"Failed to initialize database: {e}")
         raise
 
-    # Rest of your app setup...
+    # Update logger with database configuration - MUST happen after settings are loaded
+    setup_logger("auth-service", level=settings.LOG_LEVEL)
+    
     settings_instance = settings
 
     app.add_middleware(
@@ -39,7 +39,6 @@ def create_app():
     async def log_requests(request: Request, call_next):
         request_id = generate_request_id()
         set_logging_context(request_id=request_id)
-
         auth_service_logger.info(
             "Auth request started",
             extra={
@@ -48,10 +47,8 @@ def create_app():
                 "client_ip": request.client.host
             }
         )
-
         try:
             response = await call_next(request)
-
             auth_service_logger.info(
                 "Auth request completed",
                 extra={
@@ -60,9 +57,7 @@ def create_app():
                     "status_code": response.status_code
                 }
             )
-
             return response
-
         except Exception as e:
             auth_service_logger.error(
                 "Auth request failed",
@@ -85,16 +80,16 @@ def create_app():
         auth_service_logger.info("Auth service health check performed")
         return {"status": "healthy", "service": "auth-service"}
 
+    # Include both auth and admin routers
     app.include_router(auth_router, prefix="/api/v1/auth", tags=["authentication"])
+    app.include_router(admin_router, prefix="/api/v1/auth", tags=["admin"])
 
     return app
-
 
 app = create_app()
 
 if __name__ == "__main__":
     import uvicorn
-
     auth_service_logger.info("Starting Auth Service")
     uvicorn.run(
         "main:app",

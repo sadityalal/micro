@@ -13,6 +13,8 @@ services:
     networks:
       - microservices-network
     restart: unless-stopped
+    volumes:
+      - ./logs:/app/logs
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
@@ -35,6 +37,8 @@ services:
     networks:
       - microservices-network
     restart: unless-stopped
+    volumes:
+      - ./logs:/app/logs
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
       interval: 30s

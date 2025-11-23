@@ -5,7 +5,6 @@ from typing import List, Optional, Dict
 from datetime import datetime
 import ipaddress
 
-
 class UserRepository:
     def __init__(self, db: Session):
         self.db = db
@@ -66,12 +65,10 @@ class UserRepository:
             self.db.commit()
 
     def log_login_attempt(self, login_data: dict):
-        # Validate IP address
         try:
             ipaddress.ip_address(login_data.get('ip_address', ''))
         except ValueError:
             login_data['ip_address'] = None
-
         login_log = LoginHistory(**login_data)
         self.db.add(login_log)
         self.db.commit()
@@ -94,3 +91,68 @@ class UserRepository:
         )
         self.db.add(tenant_user)
         self.db.commit()
+
+    # NEW: Enhanced methods for admin functionality
+    def get_all_users(self, skip: int = 0, limit: int = 100) -> List[User]:
+        return self.db.query(User).offset(skip).limit(limit).all()
+
+    def update_user(self, user_id: int, update_data: dict):
+        user = self.get_user_by_id(user_id)
+        if user:
+            for key, value in update_data.items():
+                setattr(user, key, value)
+            self.db.commit()
+
+    def get_role_by_id(self, role_id: int):
+        return self.db.query(UserRole).filter(UserRole.id == role_id).first()
+
+    def assign_role_to_user(self, user_id: int, role_id: int, assigned_by: int):
+        # Check if assignment already exists
+        existing = self.db.query(UserRoleAssignment).filter(
+            UserRoleAssignment.user_id == user_id,
+            UserRoleAssignment.role_id == role_id
+        ).first()
+        
+        if not existing:
+            assignment = UserRoleAssignment(
+                user_id=user_id,
+                role_id=role_id,
+                assigned_by=assigned_by
+            )
+            self.db.add(assignment)
+            self.db.commit()
+
+    def get_total_users_count(self) -> int:
+        return self.db.query(User).count()
+
+    def get_active_users_count(self) -> int:
+        # Assuming you have an is_active field or similar logic
+        return self.db.query(User).count()  # Modify based on your active user logic
+
+    def get_login_attempts_count(self, hours: int = 24) -> int:
+        from datetime import datetime, timedelta
+        since_time = datetime.utcnow() - timedelta(hours=hours)
+        return self.db.query(LoginHistory).filter(
+            LoginHistory.login_time >= since_time
+        ).count()
+
+    def get_failed_login_attempts_count(self, hours: int = 24) -> int:
+        from datetime import datetime, timedelta
+        since_time = datetime.utcnow() - timedelta(hours=hours)
+        return self.db.query(LoginHistory).filter(
+            LoginHistory.login_time >= since_time,
+            LoginHistory.status == 'failed'
+        ).count()
+
+    def get_login_history(self, user_id: Optional[int] = None, hours: int = 24, skip: int = 0, limit: int = 100):
+        from datetime import datetime, timedelta
+        query = self.db.query(LoginHistory)
+        
+        if user_id:
+            query = query.filter(LoginHistory.user_id == user_id)
+        
+        if hours:
+            since_time = datetime.utcnow() - timedelta(hours=hours)
+            query = query.filter(LoginHistory.login_time >= since_time)
+        
+        return query.order_by(LoginHistory.login_time.desc()).offset(skip).limit(limit).all()

@@ -5,10 +5,10 @@ from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError, InvalidHashError
 from shared.database.repositories.user_repository import UserRepository
 from shared.database.repositories.tenant_repository import TenantRepository
+from shared.security.session_manager import SessionManager
 from shared.schemas.auth import TokenData, Token
 import redis
 import time
-
 
 class RateLimiter:
     def __init__(self, redis_client: redis.Redis):
@@ -17,15 +17,12 @@ class RateLimiter:
     def is_rate_limited(self, key: str, max_requests: int, window_seconds: int) -> Tuple[bool, int]:
         now = int(time.time())
         window_key = f"rate_limit:{key}:{now // window_seconds}"
-
         pipe = self.redis.pipeline()
         pipe.incr(window_key)
         pipe.expire(window_key, window_seconds)
         result = pipe.execute()
-
         request_count = result[0]
         return request_count > max_requests, max_requests - request_count
-
 
 class AuthService:
     def __init__(self, user_repo: UserRepository, tenant_repo: TenantRepository, redis_client: redis.Redis):
@@ -34,6 +31,7 @@ class AuthService:
         self.redis_client = redis_client
         self.ph = PasswordHasher()
         self.rate_limiter = RateLimiter(redis_client)
+        self.session_manager = SessionManager(redis_client)
 
     def check_login_rate_limit(self, identifier: str) -> Tuple[bool, int]:
         key = f"login_attempts:{identifier}"
@@ -59,17 +57,13 @@ class AuthService:
     def get_password_hash(self, password: str) -> str:
         return self.ph.hash(password)
 
-    def authenticate_user(self, login_identifier: str, password: str, tenant_id: Optional[int] = None) -> Optional[
-        Dict]:
-        # Check rate limiting
+    def authenticate_user(self, login_identifier: str, password: str, tenant_id: Optional[int] = None) -> Optional[Dict]:
         is_limited, remaining = self.check_login_rate_limit(login_identifier)
         if is_limited:
             return None
 
         user_repo = self.user_repo
         user = None
-
-        # Try different identifiers
         for method in [user_repo.get_user_by_email, user_repo.get_user_by_phone,
                        user_repo.get_user_by_additional_phone, user_repo.get_user_by_username]:
             user = method(login_identifier, tenant_id)
@@ -79,14 +73,11 @@ class AuthService:
         if not user:
             return None
 
-        # Verify password
         if not self.verify_password(password, user.password_hash):
             return None
 
-        # Get user roles and permissions
         roles = user_repo.get_user_roles(user.id)
         permissions = user_repo.get_user_permissions(user.id)
-
         return {
             "id": user.id,
             "email": user.email,
@@ -101,18 +92,15 @@ class AuthService:
     def create_access_token(self, data: dict, tenant_id: int, expires_delta: Optional[timedelta] = None) -> str:
         security_config = self.get_tenant_security_config(tenant_id)
         to_encode = data.copy()
-
         if expires_delta:
             expire = datetime.utcnow() + expires_delta
         else:
             expire = datetime.utcnow() + timedelta(minutes=security_config["access_token_expiry_minutes"])
-
         to_encode.update({
             "exp": expire,
             "iat": datetime.utcnow(),
             "type": "access"
         })
-
         return jwt.encode(
             to_encode,
             security_config["jwt_secret_key"],
@@ -123,13 +111,11 @@ class AuthService:
         security_config = self.get_tenant_security_config(tenant_id)
         to_encode = data.copy()
         expire = datetime.utcnow() + timedelta(days=security_config["refresh_token_expiry_days"])
-
         to_encode.update({
             "exp": expire,
             "iat": datetime.utcnow(),
             "type": "refresh"
         })
-
         return jwt.encode(
             to_encode,
             security_config["jwt_secret_key"],
@@ -144,17 +130,19 @@ class AuthService:
                 security_config["jwt_secret_key"],
                 algorithms=[security_config["jwt_algorithm"]]
             )
-
-            # Check expiration
             exp_timestamp = payload.get("exp")
             if not exp_timestamp or datetime.utcnow().timestamp() > exp_timestamp:
                 return None
-
-            # Validate token type
             token_type = payload.get("type")
             if token_type not in ["access", "refresh"]:
                 return None
-
+            
+            # Check if token is revoked
+            if token_type == "access":
+                token_key = f"revoked_token:{token}"
+                if self.redis_client.exists(token_key):
+                    return None
+                    
             return TokenData(
                 user_id=payload.get("user_id"),
                 tenant_id=payload.get("tenant_id", tenant_id),
@@ -166,7 +154,7 @@ class AuthService:
         except JWTError:
             return None
 
-    def create_tokens(self, user_data: dict, tenant_id: int) -> Token:
+    async def create_tokens(self, user_data: dict, tenant_id: int, request: Any = None) -> Token:
         token_data = {
             "user_id": user_data["id"],
             "email": user_data["email"],
@@ -174,18 +162,30 @@ class AuthService:
             "permissions": user_data["permissions"],
             "tenant_id": tenant_id
         }
-
         access_token = self.create_access_token(token_data, tenant_id)
         refresh_token = self.create_refresh_token(token_data, tenant_id)
-
-        # Store refresh token in Redis with expiration
+        
+        # Store refresh token
         refresh_key = f"refresh_token:{user_data['id']}:{tenant_id}"
         self.redis_client.setex(
             refresh_key,
             timedelta(days=7),
             refresh_token
         )
-
+        
+        # Create session if request context is available
+        if request:
+            user_agent = request.headers.get("user-agent")
+            client_ip = request.client.host if request.client else None
+            session_data = self.session_manager.create_session(
+                user_id=user_data["id"],
+                tenant_id=tenant_id,
+                user_agent=user_agent,
+                ip_address=client_ip,
+                roles=user_data["roles"],
+                permissions=user_data["permissions"]
+            )
+        
         return Token(
             access_token=access_token,
             refresh_token=refresh_token,
@@ -201,16 +201,33 @@ class AuthService:
         refresh_key = f"refresh_token:{user_id}:{tenant_id}"
         self.redis_client.delete(refresh_key)
 
+    def revoke_access_token(self, token: str, expires_in: int = 3600):
+        """Revoke access token by storing it in Redis with TTL"""
+        token_key = f"revoked_token:{token}"
+        self.redis_client.setex(token_key, expires_in, "revoked")
+
     def validate_refresh_token(self, refresh_token: str, tenant_id: int) -> Optional[TokenData]:
         token_data = self.verify_token(refresh_token, tenant_id)
         if not token_data or token_data.user_id is None:
             return None
-
-        # Verify refresh token exists in storage
         refresh_key = f"refresh_token:{token_data.user_id}:{tenant_id}"
         stored_token = self.redis_client.get(refresh_key)
-
         if not stored_token or stored_token != refresh_token:
             return None
-
         return token_data
+
+    async def logout_user(self, user_id: int, tenant_id: int, access_token: str = None):
+        """Complete logout - revoke tokens and delete sessions"""
+        # Revoke refresh token
+        self.revoke_refresh_token(user_id, tenant_id)
+        
+        # Revoke access token if provided
+        if access_token:
+            self.revoke_access_token(access_token)
+            
+        # Delete all user sessions
+        await self.session_manager.delete_user_sessions(user_id, tenant_id)
+
+    async def get_user_sessions(self, user_id: int, tenant_id: int):
+        """Get active sessions for user"""
+        return self.session_manager.get_active_user_sessions(user_id, tenant_id)
