@@ -53,17 +53,8 @@ class TenantRepository:
             for setting in settings
         ]
 
-    def get_service_urls(self, tenant_id: int) -> List[Dict]:
-        services = self.db.query(ServiceUrls).filter(ServiceUrls.tenant_id == tenant_id).all()
-        return [
-            {
-                "service_name": service.service_name,
-                "base_url": service.base_url,
-                "health_endpoint": service.health_endpoint,
-                "status": service.status.value
-            }
-            for service in services
-        ]
+    def get_service_urls(self, tenant_id: int) -> List[ServiceUrls]:
+        return self.db.query(ServiceUrls).filter(ServiceUrls.tenant_id == tenant_id).all()
 
     def get_all_active_tenants(self) -> List[Tenant]:
         return self.db.query(Tenant).filter(Tenant.status == 'active').all()

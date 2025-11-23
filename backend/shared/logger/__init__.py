@@ -1,5 +1,6 @@
 import logging
 import sys
+import os
 from typing import Optional
 import json
 from datetime import datetime
@@ -17,44 +18,87 @@ class JSONFormatter(logging.Formatter):
             "line": record.lineno
         }
 
-        # Add extra fields if present
-        if hasattr(record, 'extra'):
-            log_entry.update(record.extra)
+        # Add context if available
+        if hasattr(record, 'request_id'):
+            log_entry["request_id"] = record.request_id
+        if hasattr(record, 'user_id'):
+            log_entry["user_id"] = record.user_id
+        if hasattr(record, 'tenant_id'):
+            log_entry["tenant_id"] = record.tenant_id
 
-        # Add exception info if present
         if record.exc_info:
             log_entry["exception"] = self.formatException(record.exc_info)
 
         return json.dumps(log_entry)
 
 
+def get_log_level_from_config() -> int:
+    """Get log level from database configuration"""
+    try:
+        from shared.database.connection import get_db
+        from shared.database.config_service import db_config_service
+
+        db_gen = get_db()
+        db_session = next(db_gen)
+        try:
+            config = db_config_service.get_tenant_config(db_session, 1)  # Default tenant
+            log_level_str = config["logging"]["log_level"].upper()
+
+            log_levels = {
+                "DEBUG": logging.DEBUG,
+                "INFO": logging.INFO,
+                "WARNING": logging.WARNING,
+                "ERROR": logging.ERROR,
+                "CRITICAL": logging.CRITICAL
+            }
+
+            return log_levels.get(log_level_str, logging.INFO)
+
+        finally:
+            try:
+                next(db_gen)
+            except StopIteration:
+                pass
+
+    except Exception as e:
+        # Fallback if database not available
+        print(f"Failed to get log level from database: {e}")
+        return logging.INFO
+
+
 def setup_logger(
         name: str,
-        level: int = logging.INFO,
-        format: str = "json",  # "json" or "text"
+        level: Optional[int] = None,
+        format: str = "json",
         extra_handlers: Optional[list] = None
 ) -> logging.Logger:
-    """
-    Setup and return a logger with consistent configuration
-
-    Args:
-        name: Logger name (usually __name__)
-        level: Logging level
-        format: "json" for structured logs, "text" for human-readable
-        extra_handlers: Additional logging handlers
-    """
     logger = logging.getLogger(name)
 
-    # Avoid duplicate handlers
     if logger.handlers:
         return logger
 
+    # Get log level from database, fallback to INFO
+    if level is None:
+        level = get_log_level_from_config()
+
     logger.setLevel(level)
 
-    # Create console handler
+    # Log to root project directory
+    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../"))
+    logs_dir = os.path.join(project_root, "logs")
+
+    # Use logger name for log file
+    log_file = os.path.join(logs_dir, f"{name}.log")
+
+    # Ensure log directory exists
+    os.makedirs(logs_dir, exist_ok=True)
+
+    # File handler for service-specific logs
+    file_handler = logging.FileHandler(log_file)
+
+    # Console handler for all logs
     console_handler = logging.StreamHandler(sys.stdout)
 
-    # Set formatter based on format type
     if format == "json":
         formatter = JSONFormatter()
     else:
@@ -62,20 +106,23 @@ def setup_logger(
             '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
         )
 
+    file_handler.setFormatter(formatter)
     console_handler.setFormatter(formatter)
+
+    logger.addHandler(file_handler)
     logger.addHandler(console_handler)
 
-    # Add extra handlers if provided
     if extra_handlers:
         for handler in extra_handlers:
             handler.setFormatter(formatter)
             logger.addHandler(handler)
 
-    # Prevent propagation to root logger to avoid duplicate logs
     logger.propagate = False
 
+    logger.info(f"Logger initialized with level: {logging.getLevelName(level)}")
     return logger
 
 
-# Create default logger
-default_logger = setup_logger("shared")
+# Service-specific loggers
+api_gateway_logger = setup_logger("api-gateway")
+auth_service_logger = setup_logger("auth-service")

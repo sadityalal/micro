@@ -7,7 +7,6 @@ from shared.database.repositories.user_repository import UserRepository
 from shared.database.repositories.tenant_repository import TenantRepository
 from shared.schemas.auth import TokenData, Token
 import redis
-import json
 
 
 class AuthService:
@@ -18,9 +17,8 @@ class AuthService:
         self.ph = PasswordHasher()
 
     def get_tenant_security_config(self, tenant_id: int) -> Dict[str, Any]:
-        """Get security configuration for a tenant"""
+        """Get security configuration from database"""
         security_settings = self.tenant_repo.get_tenant_security_settings(tenant_id)
-
         if not security_settings:
             raise Exception(f"Security settings not found for tenant {tenant_id}")
 
@@ -40,10 +38,8 @@ class AuthService:
     def get_password_hash(self, password: str) -> str:
         return self.ph.hash(password)
 
-    # Rest of the methods remain same...
     def authenticate_user(self, login_identifier: str, password: str, tenant_id: Optional[int] = None) -> Optional[
         Dict]:
-        """Authenticate user using email, phone, username, or additional_phone"""
         user_repo = self.user_repo
         user = None
         user = user_repo.get_user_by_email(login_identifier, tenant_id)
@@ -71,15 +67,12 @@ class AuthService:
         }
 
     def create_access_token(self, data: dict, tenant_id: int, expires_delta: Optional[timedelta] = None) -> str:
-        """Create JWT access token"""
         security_config = self.get_tenant_security_config(tenant_id)
-
         to_encode = data.copy()
         if expires_delta:
             expire = datetime.utcnow() + expires_delta
         else:
             expire = datetime.utcnow() + timedelta(minutes=security_config["access_token_expiry_minutes"])
-
         to_encode.update({"exp": expire})
         encoded_jwt = jwt.encode(
             to_encode,
@@ -89,13 +82,10 @@ class AuthService:
         return encoded_jwt
 
     def create_refresh_token(self, data: dict, tenant_id: int) -> str:
-        """Create JWT refresh token"""
         security_config = self.get_tenant_security_config(tenant_id)
-
         to_encode = data.copy()
         expire = datetime.utcnow() + timedelta(days=security_config["refresh_token_expiry_days"])
         to_encode.update({"exp": expire, "type": "refresh"})
-
         encoded_jwt = jwt.encode(
             to_encode,
             security_config["jwt_secret_key"],
@@ -111,21 +101,16 @@ class AuthService:
                 security_config["jwt_secret_key"],
                 algorithms=[security_config["jwt_algorithm"]]
             )
-
-            # Check expiration
             exp_timestamp = payload.get("exp")
             if not exp_timestamp or datetime.utcnow().timestamp() > exp_timestamp:
                 return None
-
             user_id: int = payload.get("user_id")
             email: str = payload.get("email")
             roles: list = payload.get("roles", [])
             permissions: list = payload.get("permissions", [])
             exp: datetime = datetime.fromtimestamp(payload.get("exp"))
-
             if user_id is None or email is None:
                 return None
-
             return TokenData(
                 user_id=user_id,
                 tenant_id=tenant_id,
@@ -138,7 +123,6 @@ class AuthService:
             return None
 
     def create_tokens(self, user_data: dict, tenant_id: int) -> Token:
-        """Create both access and refresh tokens"""
         token_data = {
             "user_id": user_data["id"],
             "email": user_data["email"],
@@ -146,23 +130,19 @@ class AuthService:
             "permissions": user_data["permissions"],
             "tenant_id": tenant_id
         }
-
         access_token = self.create_access_token(token_data, tenant_id)
         refresh_token = self.create_refresh_token(token_data, tenant_id)
-
-        # Store refresh token in Redis
         refresh_key = f"refresh_token:{user_data['id']}:{tenant_id}"
         self.redis_client.setex(
             refresh_key,
-            timedelta(days=7),  # 7 days expiry for refresh token
+            timedelta(days=7),
             refresh_token
         )
-
         return Token(
             access_token=access_token,
             refresh_token=refresh_token,
             token_type="bearer",
-            expires_in=3600,  # 1 hour in seconds
+            expires_in=3600,
             user_id=user_data["id"],
             tenant_id=tenant_id,
             roles=user_data["roles"],
@@ -170,21 +150,15 @@ class AuthService:
         )
 
     def revoke_refresh_token(self, user_id: int, tenant_id: int):
-        """Revoke refresh token from Redis"""
         refresh_key = f"refresh_token:{user_id}:{tenant_id}"
         self.redis_client.delete(refresh_key)
 
     def validate_refresh_token(self, refresh_token: str, tenant_id: int) -> Optional[TokenData]:
-        """Validate refresh token and return token data"""
         token_data = self.verify_token(refresh_token, tenant_id)
         if not token_data or token_data.user_id is None:
             return None
-
-        # Check if refresh token exists in Redis
         refresh_key = f"refresh_token:{token_data.user_id}:{tenant_id}"
         stored_token = self.redis_client.get(refresh_key)
-
         if not stored_token or stored_token.decode() != refresh_token:
             return None
-
         return token_data

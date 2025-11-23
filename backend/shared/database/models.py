@@ -440,7 +440,7 @@ class InfrastructureSettings(Base):
     timeout_seconds = Column(Integer, default=30)
     status = Column(Enum(ServiceStatus), default='active')
     health_check_url = Column(String(500))
-    config_metadata = Column(JSON)
+    config_metadata = Column('metadata', JSON)
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 

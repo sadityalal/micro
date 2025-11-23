@@ -1,36 +1,89 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from .config import settings
-
-app = FastAPI(
-    title="Auth Service",
-    description="Authentication and Authorization Microservice",
-    version="1.0.0"
-)
-
-# CORS middleware
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=settings.CORS_ORIGINS,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-@app.get("/")
-async def root():
-    return {"message": "Auth Service is running"}
-
-@app.get("/health")
-async def health_check():
-    return {"status": "healthy", "service": "auth-service"}
-
-# MOVE THIS IMPORT TO HERE (after app creation)
 from .endpoints import router as auth_router
-app.include_router(auth_router, prefix="/api/v1/auth", tags=["authentication"])
+from shared.database.connection import get_db
+from shared.logger import auth_service_logger, set_logging_context, generate_request_id
+
+
+def create_app():
+    settings_instance = settings
+
+    app = FastAPI(
+        title="Auth Service",
+        description="Authentication and Authorization Microservice",
+        version="1.0.0"
+    )
+
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings_instance.CORS_ORIGINS,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+    @app.middleware("http")
+    async def log_requests(request: Request, call_next):
+        request_id = generate_request_id()
+        set_logging_context(request_id=request_id)
+
+        auth_service_logger.info(
+            "Auth request started",
+            extra={
+                "method": request.method,
+                "url": str(request.url),
+                "client_ip": request.client.host
+            }
+        )
+
+        try:
+            response = await call_next(request)
+
+            auth_service_logger.info(
+                "Auth request completed",
+                extra={
+                    "method": request.method,
+                    "url": str(request.url),
+                    "status_code": response.status_code
+                }
+            )
+
+            return response
+
+        except Exception as e:
+            auth_service_logger.error(
+                "Auth request failed",
+                extra={
+                    "method": request.method,
+                    "url": str(request.url),
+                    "error": str(e)
+                },
+                exc_info=True
+            )
+            raise
+
+    @app.get("/")
+    async def root():
+        auth_service_logger.info("Auth service root endpoint accessed")
+        return {"message": "Auth Service is running"}
+
+    @app.get("/health")
+    async def health_check():
+        auth_service_logger.info("Auth service health check performed")
+        return {"status": "healthy", "service": "auth-service"}
+
+    app.include_router(auth_router, prefix="/api/v1/auth", tags=["authentication"])
+
+    return app
+
+
+app = create_app()
 
 if __name__ == "__main__":
     import uvicorn
+
+    auth_service_logger.info("Starting Auth Service")
     uvicorn.run(
         "main:app",
         host=settings.AUTH_SERVICE_HOST,
