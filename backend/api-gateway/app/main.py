@@ -16,8 +16,7 @@ def create_app():
     )
     
     setup_logger("api-gateway", level=settings_instance.LOG_LEVEL)
-    
-    # Function middleware FIRST (runs first, ends last)
+
     @app.middleware("http")
     async def log_requests(request: Request, call_next):
         request_id = generate_request_id()
@@ -55,11 +54,12 @@ def create_app():
             )
             raise
 
-    # Class-based middleware SECOND (runs after function middleware)
+    # Initialize auth client
     auth_client = AuthClient(settings_instance.AUTH_SERVICE_URL)
-    app.add_middleware(AuthenticationMiddleware, auth_client=auth_client)
     
-    # CORS middleware LAST
+    # Add authentication middleware - FIXED: Properly initialize the middleware
+    app.add_middleware(AuthenticationMiddleware, auth_client=auth_client)
+
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings_instance.CORS_ORIGINS,
@@ -157,7 +157,7 @@ def create_app():
 
     @app.get("/api/v1/protected")
     async def protected_route(request: Request, tenant_id: int = Depends(get_tenant_id)):
-        # Safely access user data from middleware
+        # Get user data from request state (set by middleware)
         user_data = getattr(request.state, 'user', {})
         user_id = user_data.get("user_id")
         tenant_id = user_data.get("tenant_id", tenant_id)

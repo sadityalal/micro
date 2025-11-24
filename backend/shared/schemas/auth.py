@@ -25,7 +25,7 @@ class TokenData(BaseModel):
     exp: datetime
 
 class UserLogin(BaseModel):
-    email: EmailStr
+    login_identifier: str
     password: str
     tenant_domain: Optional[str] = None
 
@@ -35,6 +35,7 @@ class UserCreate(BaseModel):
     email: EmailStr
     password: str
     phone: Optional[str] = None
+    username: Optional[str] = None
     tenant_domain: Optional[str] = None
 
     @validator('password')
