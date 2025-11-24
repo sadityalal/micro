@@ -1158,6 +1158,24 @@ INSERT INTO system_settings (setting_key, setting_value, setting_type) VALUES
 ('cache_default_ttl', '300', 'integer')
 ON CONFLICT (setting_key) DO NOTHING;
 
+
+-- Notification Settings
+INSERT INTO tenant_notification_settings (tenant_id, setting_key, setting_value, setting_type) VALUES
+(1, 'smtp_host', 'smtp.dummy.example.com', 'string'),
+(1, 'smtp_port', '587', 'integer'),
+(1, 'smtp_username', 'dummy@example.com', 'string'),
+(1, 'smtp_password', 'dummy_password', 'string'),
+(1, 'smtp_use_tls', 'true', 'boolean'),
+(1, 'sms_provider', 'dummy_sms_provider', 'string'),
+(1, 'sms_api_key', 'dummy_sms_api_key', 'string'),
+(1, 'sms_sender_id', 'PAVITRA', 'string'),
+(1, 'whatsapp_provider', 'dummy_whatsapp', 'string'),
+(1, 'whatsapp_api_key', 'dummy_whatsapp_key', 'string'),
+(1, 'telegram_bot_token', 'dummy_telegram_token', 'string'),
+(1, 'push_notification_key', 'dummy_push_key', 'string')
+ON CONFLICT (tenant_id, setting_key) DO UPDATE SET
+    setting_value = EXCLUDED.setting_value,
+    updated_at = CURRENT_TIMESTAMP;
 -- =====================================================
 -- DATABASE USER CREATION (ADD AT THE TOP AFTER EXTENSIONS)
 -- =====================================================
