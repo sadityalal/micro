@@ -1,11 +1,11 @@
 from typing import List
 from shared.database.config_service import db_config_service
 from shared.database.connection import initialize_databases
+import os
 
 class Settings:
     def __init__(self, tenant_id: int = 1):
         self.tenant_id = tenant_id
-        # Initialize database before any property access
         initialize_databases()
 
     @property
@@ -23,6 +23,19 @@ class Settings:
         db_session = next(db_gen)
         try:
             return db_config_service.get_service_url(db_session, self.tenant_id, "auth_service")
+        finally:
+            try:
+                next(db_gen)
+            except StopIteration:
+                pass
+
+    @property
+    def USER_SERVICE_URL(self) -> str:
+        from shared.database.connection import get_db
+        db_gen = get_db(self.tenant_id)
+        db_session = next(db_gen)
+        try:
+            return db_config_service.get_service_url(db_session, self.tenant_id, "user_service")
         finally:
             try:
                 next(db_gen)

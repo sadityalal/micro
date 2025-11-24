@@ -6,6 +6,7 @@ from .middleware import AuthenticationMiddleware, get_tenant_id
 from shared.logger import api_gateway_logger, set_logging_context, generate_request_id, setup_logger
 import httpx
 import json
+import os
 
 def create_app():
     settings_instance = settings
@@ -54,10 +55,7 @@ def create_app():
             )
             raise
 
-    # Initialize auth client
     auth_client = AuthClient(settings_instance.AUTH_SERVICE_URL)
-    
-    # Add authentication middleware - FIXED: Properly initialize the middleware
     app.add_middleware(AuthenticationMiddleware, auth_client=auth_client)
 
     app.add_middleware(
@@ -68,6 +66,7 @@ def create_app():
         allow_headers=["*"],
     )
 
+    # === HEALTH & ROOT ===
     @app.get("/")
     async def root():
         api_gateway_logger.info("Root endpoint accessed")
@@ -78,6 +77,7 @@ def create_app():
         api_gateway_logger.info("Health check performed")
         return {"status": "healthy", "service": "api-gateway"}
 
+    # === AUTH SERVICE ROUTES ===
     @app.post("/api/v1/auth/register")
     async def register(request: Request):
         api_gateway_logger.info("Register route called")
@@ -155,14 +155,242 @@ def create_app():
             api_gateway_logger.info("Admin management request forwarded")
             return response.json()
 
+    # === USER SERVICE ROUTES ===
+    
+    # Profile Management
+    @app.get("/api/v1/user/profile")
+    async def get_user_profile(request: Request):
+        api_gateway_logger.info("Get user profile route called")
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{settings_instance.USER_SERVICE_URL}/api/v1/user/profile",
+                headers=request.headers
+            )
+            return response.json()
+
+    @app.put("/api/v1/user/profile")
+    async def update_user_profile(request: Request):
+        api_gateway_logger.info("Update user profile route called")
+        async with httpx.AsyncClient() as client:
+            response = await client.put(
+                f"{settings_instance.USER_SERVICE_URL}/api/v1/user/profile",
+                content=await request.body(),
+                headers=request.headers
+            )
+            return response.json()
+
+    # Account Security
+    @app.put("/api/v1/user/password")
+    async def change_password(request: Request):
+        api_gateway_logger.info("Change password route called")
+        async with httpx.AsyncClient() as client:
+            response = await client.put(
+                f"{settings_instance.USER_SERVICE_URL}/api/v1/user/password",
+                content=await request.body(),
+                headers=request.headers
+            )
+            return response.json()
+
+    @app.post("/api/v1/user/deactivate")
+    async def deactivate_account(request: Request):
+        api_gateway_logger.info("Deactivate account route called")
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{settings_instance.USER_SERVICE_URL}/api/v1/user/deactivate",
+                content=await request.body(),
+                headers=request.headers
+            )
+            return response.json()
+
+    @app.post("/api/v1/user/reactivate")
+    async def reactivate_account(request: Request):
+        api_gateway_logger.info("Reactivate account route called")
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{settings_instance.USER_SERVICE_URL}/api/v1/user/reactivate",
+                content=await request.body(),
+                headers=request.headers
+            )
+            return response.json()
+
+    @app.post("/api/v1/user/delete-account")
+    async def request_account_deletion(request: Request):
+        api_gateway_logger.info("Request account deletion route called")
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{settings_instance.USER_SERVICE_URL}/api/v1/user/delete-account",
+                content=await request.body(),
+                headers=request.headers
+            )
+            return response.json()
+
+    @app.post("/api/v1/user/cancel-deletion")
+    async def cancel_account_deletion(request: Request):
+        api_gateway_logger.info("Cancel account deletion route called")
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{settings_instance.USER_SERVICE_URL}/api/v1/user/cancel-deletion",
+                content=await request.body(),
+                headers=request.headers
+            )
+            return response.json()
+
+    # Address Management
+    @app.get("/api/v1/user/addresses")
+    async def get_addresses(request: Request):
+        api_gateway_logger.info("Get addresses route called")
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{settings_instance.USER_SERVICE_URL}/api/v1/user/addresses",
+                headers=request.headers
+            )
+            return response.json()
+
+    @app.post("/api/v1/user/addresses")
+    async def create_address(request: Request):
+        api_gateway_logger.info("Create address route called")
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{settings_instance.USER_SERVICE_URL}/api/v1/user/addresses",
+                content=await request.body(),
+                headers=request.headers
+            )
+            return response.json()
+
+    @app.put("/api/v1/user/addresses/{address_id}")
+    async def update_address(request: Request, address_id: int):
+        api_gateway_logger.info(f"Update address route called for address_id: {address_id}")
+        async with httpx.AsyncClient() as client:
+            response = await client.put(
+                f"{settings_instance.USER_SERVICE_URL}/api/v1/user/addresses/{address_id}",
+                content=await request.body(),
+                headers=request.headers
+            )
+            return response.json()
+
+    @app.delete("/api/v1/user/addresses/{address_id}")
+    async def delete_address(request: Request, address_id: int):
+        api_gateway_logger.info(f"Delete address route called for address_id: {address_id}")
+        async with httpx.AsyncClient() as client:
+            response = await client.delete(
+                f"{settings_instance.USER_SERVICE_URL}/api/v1/user/addresses/{address_id}",
+                headers=request.headers
+            )
+            return response.json()
+
+    @app.put("/api/v1/user/addresses/{address_id}/default")
+    async def set_default_address(request: Request, address_id: int):
+        api_gateway_logger.info(f"Set default address route called for address_id: {address_id}")
+        async with httpx.AsyncClient() as client:
+            response = await client.put(
+                f"{settings_instance.USER_SERVICE_URL}/api/v1/user/addresses/{address_id}/default",
+                headers=request.headers
+            )
+            return response.json()
+
+    # Session Management
+    @app.get("/api/v1/user/sessions")
+    async def get_sessions(request: Request):
+        api_gateway_logger.info("Get sessions route called")
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{settings_instance.USER_SERVICE_URL}/api/v1/user/sessions",
+                headers=request.headers
+            )
+            return response.json()
+
+    @app.delete("/api/v1/user/sessions/{session_id}")
+    async def terminate_session(request: Request, session_id: str):
+        api_gateway_logger.info(f"Terminate session route called for session_id: {session_id}")
+        async with httpx.AsyncClient() as client:
+            response = await client.delete(
+                f"{settings_instance.USER_SERVICE_URL}/api/v1/user/sessions/{session_id}",
+                headers=request.headers
+            )
+            return response.json()
+
+    @app.post("/api/v1/user/sessions/terminate-all")
+    async def terminate_all_sessions(request: Request):
+        api_gateway_logger.info("Terminate all sessions route called")
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{settings_instance.USER_SERVICE_URL}/api/v1/user/sessions/terminate-all",
+                headers=request.headers
+            )
+            return response.json()
+
+    # Preferences & Consent
+    @app.get("/api/v1/user/preferences")
+    async def get_preferences(request: Request):
+        api_gateway_logger.info("Get preferences route called")
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{settings_instance.USER_SERVICE_URL}/api/v1/user/preferences",
+                headers=request.headers
+            )
+            return response.json()
+
+    @app.put("/api/v1/user/preferences")
+    async def update_preferences(request: Request):
+        api_gateway_logger.info("Update preferences route called")
+        async with httpx.AsyncClient() as client:
+            response = await client.put(
+                f"{settings_instance.USER_SERVICE_URL}/api/v1/user/preferences",
+                content=await request.body(),
+                headers=request.headers
+            )
+            return response.json()
+
+    @app.post("/api/v1/user/consent")
+    async def record_consent(request: Request):
+        api_gateway_logger.info("Record consent route called")
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{settings_instance.USER_SERVICE_URL}/api/v1/user/consent",
+                content=await request.body(),
+                headers=request.headers
+            )
+            return response.json()
+
+    @app.get("/api/v1/user/consents")
+    async def get_consents(request: Request):
+        api_gateway_logger.info("Get consents route called")
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{settings_instance.USER_SERVICE_URL}/api/v1/user/consents",
+                headers=request.headers
+            )
+            return response.json()
+
+    # Login History
+    @app.get("/api/v1/user/login-history")
+    async def get_login_history(request: Request):
+        api_gateway_logger.info("Get login history route called")
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{settings_instance.USER_SERVICE_URL}/api/v1/user/login-history",
+                headers=request.headers
+            )
+            return response.json()
+
+    # Data Export (GDPR)
+    @app.get("/api/v1/user/export-data")
+    async def export_user_data(request: Request):
+        api_gateway_logger.info("Export user data route called")
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{settings_instance.USER_SERVICE_URL}/api/v1/user/export-data",
+                headers=request.headers
+            )
+            return response.json()
+
+    # === PROTECTED ROUTE (for testing) ===
     @app.get("/api/v1/protected")
     async def protected_route(request: Request, tenant_id: int = Depends(get_tenant_id)):
-        # Get user data from request state (set by middleware)
         user_data = getattr(request.state, 'user', {})
         user_id = user_data.get("user_id")
         tenant_id = user_data.get("tenant_id", tenant_id)
         roles = user_data.get("roles", [])
-        
         api_gateway_logger.info(
             "Protected route accessed",
             extra={
@@ -171,7 +399,6 @@ def create_app():
                 "roles": roles
             }
         )
-        
         return {
             "message": "This is a protected route",
             "user_id": user_id,

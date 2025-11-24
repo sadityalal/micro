@@ -266,6 +266,71 @@ class TenantUser(Base):
     joined_at = Column(DateTime, server_default=func.now())
     role_id = Column(BigInteger, ForeignKey("user_roles.id"), nullable=False)
 
+class Address(Base):
+    __tablename__ = "addresses"
+    id = Column(BigInteger, primary_key=True)
+    user_id = Column(BigInteger, ForeignKey("users.id"), nullable=False)
+    type = Column(String(20), nullable=False)  # home, work, billing, shipping
+    address_line1 = Column(String(255), nullable=False)
+    address_line2 = Column(String(255))
+    city = Column(String(100), nullable=False)
+    state = Column(String(100), nullable=False)
+    country = Column(String(100), nullable=False)
+    postal_code = Column(String(20), nullable=False)
+    is_default = Column(Boolean, default=False)
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+class UserPreferences(Base):
+    __tablename__ = "user_preferences"
+    id = Column(BigInteger, primary_key=True)
+    user_id = Column(BigInteger, ForeignKey("users.id"), nullable=False, unique=True)
+    language = Column(String(10), default='en')
+    currency = Column(String(3), default='USD')
+    timezone = Column(String(50), default='UTC')
+    email_notifications = Column(Boolean, default=True)
+    sms_notifications = Column(Boolean, default=False)
+    marketing_emails = Column(Boolean, default=False)
+    two_factor_enabled = Column(Boolean, default=False)
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+class UserConsent(Base):
+    __tablename__ = "user_consents"
+    id = Column(BigInteger, primary_key=True)
+    user_id = Column(BigInteger, ForeignKey("users.id"), nullable=False)
+    consent_type = Column(String(50), nullable=False)  # privacy_policy, marketing, cookies
+    granted = Column(Boolean, nullable=False)
+    version = Column(String(20), nullable=False)  # policy version
+    ip_address = Column(String(45))
+    granted_at = Column(DateTime, server_default=func.now())
+    revoked_at = Column(DateTime)
+
+class DataDeletionRequest(Base):
+    __tablename__ = "data_deletion_requests"
+    id = Column(BigInteger, primary_key=True)
+    user_id = Column(BigInteger, ForeignKey("users.id"), nullable=False)
+    deletion_type = Column(String(20), nullable=False)  # anonymize, full_delete
+    status = Column(String(20), default='pending')  # pending, processing, completed, failed
+    reason = Column(Text)
+    scheduled_for = Column(DateTime, nullable=False)
+    created_at = Column(DateTime, server_default=func.now())
+    completed_at = Column(DateTime)
+    metadata = Column(JSON)
+
+class AuditLog(Base):
+    __tablename__ = "audit_logs"
+    id = Column(BigInteger, primary_key=True)
+    user_id = Column(BigInteger, ForeignKey("users.id"))
+    action = Column(String(100), nullable=False)
+    resource_type = Column(String(50))  # user, address, preferences
+    resource_id = Column(BigInteger)
+    old_values = Column(JSON)
+    new_values = Column(JSON)
+    ip_address = Column(String(45))
+    user_agent = Column(String(500))
+    created_at = Column(DateTime, server_default=func.now())
+
 # =====================================================
 # SETTINGS TABLES
 # =====================================================

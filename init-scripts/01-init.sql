@@ -94,6 +94,7 @@ CREATE TABLE users (
     password_hash VARCHAR(255) NOT NULL,
     telegram_username VARCHAR(100),
     additional_phone VARCHAR(20),
+    is_active BOOLEAN DEFAULT TRUE,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -898,6 +899,79 @@ CREATE TABLE activity_history (
 );
 
 -- =====================================================
+-- User/ Legal TABLES
+-- =====================================================
+-- Create addresses table
+CREATE TABLE IF NOT EXISTS addresses (
+    id BIGSERIAL PRIMARY KEY,
+    user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    type VARCHAR(20) NOT NULL CHECK (type IN ('home', 'work', 'billing', 'shipping')),
+    address_line1 VARCHAR(255) NOT NULL,
+    address_line2 VARCHAR(255),
+    city VARCHAR(100) NOT NULL,
+    state VARCHAR(100) NOT NULL,
+    country VARCHAR(100) NOT NULL,
+    postal_code VARCHAR(20) NOT NULL,
+    is_default BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Create user_preferences table
+CREATE TABLE IF NOT EXISTS user_preferences (
+    id BIGSERIAL PRIMARY KEY,
+    user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE UNIQUE,
+    language VARCHAR(10) DEFAULT 'en',
+    currency VARCHAR(3) DEFAULT 'USD',
+    timezone VARCHAR(50) DEFAULT 'UTC',
+    email_notifications BOOLEAN DEFAULT TRUE,
+    sms_notifications BOOLEAN DEFAULT FALSE,
+    marketing_emails BOOLEAN DEFAULT FALSE,
+    two_factor_enabled BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Create user_consents table for GDPR compliance
+CREATE TABLE IF NOT EXISTS user_consents (
+    id BIGSERIAL PRIMARY KEY,
+    user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    consent_type VARCHAR(50) NOT NULL,
+    granted BOOLEAN NOT NULL,
+    version VARCHAR(20) NOT NULL,
+    ip_address VARCHAR(45),
+    granted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    revoked_at TIMESTAMP
+);
+
+-- Create data_deletion_requests table for GDPR right to be forgotten
+CREATE TABLE IF NOT EXISTS data_deletion_requests (
+    id BIGSERIAL PRIMARY KEY,
+    user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    deletion_type VARCHAR(20) NOT NULL CHECK (deletion_type IN ('anonymize', 'full_delete')),
+    status VARCHAR(20) DEFAULT 'pending',
+    reason TEXT,
+    scheduled_for TIMESTAMP NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    completed_at TIMESTAMP,
+    metadata JSONB
+);
+
+-- Create audit_logs table for compliance
+CREATE TABLE IF NOT EXISTS audit_logs (
+    id BIGSERIAL PRIMARY KEY,
+    user_id BIGINT REFERENCES users(id),
+    action VARCHAR(100) NOT NULL,
+    resource_type VARCHAR(50),
+    resource_id BIGINT,
+    old_values JSONB,
+    new_values JSONB,
+    ip_address VARCHAR(45),
+    user_agent VARCHAR(500),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- =====================================================
 -- INDEXES (AFTER ALL TABLES ARE CREATED)
 -- =====================================================
 
@@ -934,6 +1008,18 @@ CREATE INDEX idx_service_urls_tenant_id ON service_urls(tenant_id);
 CREATE INDEX idx_sessions_tenant_user ON sessions(tenant_id, user_id);
 CREATE INDEX idx_login_history_tenant_user_time ON login_history(tenant_id, user_id, login_time);
 CREATE INDEX idx_activity_logs_tenant_action_time ON activity_logs(tenant_id, action, created_at);
+
+-- User Indexes
+CREATE INDEX IF NOT EXISTS idx_addresses_user_id ON addresses(user_id);
+CREATE INDEX IF NOT EXISTS idx_addresses_is_default ON addresses(is_default);
+CREATE INDEX IF NOT EXISTS idx_user_preferences_user_id ON user_preferences(user_id);
+CREATE INDEX IF NOT EXISTS idx_user_consents_user_id ON user_consents(user_id);
+CREATE INDEX IF NOT EXISTS idx_data_deletion_requests_user_id ON data_deletion_requests(user_id);
+CREATE INDEX IF NOT EXISTS idx_data_deletion_requests_status ON data_deletion_requests(status);
+CREATE INDEX IF NOT EXISTS idx_data_deletion_requests_scheduled ON data_deletion_requests(scheduled_for);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_user_id ON audit_logs(user_id);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs(created_at);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_action ON audit_logs(action);
 
 -- =====================================================
 -- SEED DATA (INSERT AFTER ALL TABLES AND INDEXES)
@@ -995,10 +1081,11 @@ ON CONFLICT (tenant_id, service_name) DO UPDATE SET
 -- Insert service URLs
 INSERT INTO service_urls (tenant_id, service_name, base_url, health_endpoint, timeout_ms, retry_attempts, circuit_breaker_enabled, status) VALUES
 (1, 'auth_service', 'http://auth:8000', '/health', 30000, 3, true, 'active'),
-(1, 'product_service', 'http://product:8001', '/health', 30000, 3, true, 'active'),
-(1, 'order_service', 'http://order:8002', '/health', 30000, 3, true, 'active'),
-(1, 'payment_service', 'http://payment:8003', '/health', 30000, 3, true, 'active'),
-(1, 'notification_service', 'http://notification:8004', '/health', 30000, 3, true, 'active')
+(1, 'user_service', 'http://auth:8001', '/health', 30000, 3, true, 'active'),
+(1, 'product_service', 'http://product:8002', '/health', 30000, 3, true, 'active'),
+(1, 'order_service', 'http://order:8003', '/health', 30000, 3, true, 'active'),
+(1, 'payment_service', 'http://payment:8004', '/health', 30000, 3, true, 'active'),
+(1, 'notification_service', 'http://notification:8005', '/health', 30000, 3, true, 'active')
 ON CONFLICT (tenant_id, service_name) DO UPDATE SET
     updated_at = CURRENT_TIMESTAMP;
 
