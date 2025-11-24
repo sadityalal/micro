@@ -7,7 +7,7 @@ import redis
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
 
-from shared.database.connection import get_db
+from shared.database.connection import get_db, get_redis
 from shared.database.repositories.user_repository import UserRepository
 from shared.logger import setup_logger
 from shared.security.session_manager import SessionManager
@@ -28,7 +28,7 @@ def get_user_repository(db: Session = Depends(get_db)):
     return UserRepository(db)
 
 def get_session_manager():
-    redis_client = redis.Redis(connection_pool=get_db().redis_pool)
+    redis_client = get_redis()
     return SessionManager(redis_client)
 
 def get_client_ip(request: Request) -> str:
@@ -580,9 +580,9 @@ async def get_sessions(
     for session in sessions:
         session_responses.append(SessionResponse(
             session_id=session.session_id,
-            created_at=session.created_at.isoformat(),
-            last_accessed=session.last_accessed.isoformat(),
-            expires_at=session.expires_at.isoformat(),
+            created_at=datetime.fromtimestamp(session.created_at).isoformat(),
+            last_accessed=datetime.fromtimestamp(session.last_accessed).isoformat(),
+            expires_at=datetime.fromtimestamp(session.expires_at).isoformat(),
             user_agent=session.user_agent,
             ip_address=session.ip_address
         ))

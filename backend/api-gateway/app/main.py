@@ -103,7 +103,11 @@ def create_app():
                 api_gateway_logger.info("Login request forwarded to auth service")
                 if response.status_code != 200:
                     api_gateway_logger.error(f"Auth service returned error: {response.status_code} - {response.text}")
-                    return {"error": "Authentication service unavailable", "status_code": response.status_code}
+                    try:
+                        error_detail = response.json()
+                        return error_detail
+                    except:
+                        return {"error": "Authentication service unavailable", "status_code": response.status_code}
                 return response.json()
             except Exception as e:
                 api_gateway_logger.error(f"Error calling auth service: {e}")
@@ -140,6 +144,91 @@ def create_app():
             response = await client.post(
                 f"{settings_instance.AUTH_SERVICE_URL}/api/v1/auth/verify",
                 content=await request.body(),
+                headers=request.headers
+            )
+            return response.json()
+
+    # === Admin Routes ===
+    @app.get("/api/v1/auth/admin/users")
+    async def admin_users_route(request: Request):
+        api_gateway_logger.info("Admin users route called")
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{settings_instance.AUTH_SERVICE_URL}/api/v1/auth/admin/users",
+                headers=request.headers,
+                params=dict(request.query_params)
+            )
+            return response.json()
+
+    @app.get("/api/v1/auth/admin/users/{user_id}")
+    async def admin_user_details_route(request: Request, user_id: int):
+        api_gateway_logger.info(f"Admin user details route called for user {user_id}")
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{settings_instance.AUTH_SERVICE_URL}/api/v1/auth/admin/users/{user_id}",
+                headers=request.headers
+            )
+            return response.json()
+
+    @app.put("/api/v1/auth/admin/users/{user_id}")
+    async def admin_update_user_route(request: Request, user_id: int):
+        api_gateway_logger.info(f"Admin update user route called for user {user_id}")
+        async with httpx.AsyncClient() as client:
+            response = await client.put(
+                f"{settings_instance.AUTH_SERVICE_URL}/api/v1/auth/admin/users/{user_id}",
+                content=await request.body(),
+                headers=request.headers
+            )
+            return response.json()
+
+    @app.post("/api/v1/auth/admin/users/{user_id}/roles")
+    async def admin_assign_role_route(request: Request, user_id: int):
+        api_gateway_logger.info(f"Admin assign role route called for user {user_id}")
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{settings_instance.AUTH_SERVICE_URL}/api/v1/auth/admin/users/{user_id}/roles",
+                content=await request.body(),
+                headers=request.headers
+            )
+            return response.json()
+
+    @app.get("/api/v1/auth/admin/stats")
+    async def admin_stats_route(request: Request):
+        api_gateway_logger.info("Admin stats route called")
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{settings_instance.AUTH_SERVICE_URL}/api/v1/auth/admin/stats",
+                headers=request.headers
+            )
+            return response.json()
+
+    @app.get("/api/v1/auth/admin/login-history")
+    async def admin_login_history_route(request: Request):
+        api_gateway_logger.info("Admin login history route called")
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{settings_instance.AUTH_SERVICE_URL}/api/v1/auth/admin/login-history",
+                headers=request.headers,
+                params=dict(request.query_params)
+            )
+            return response.json()
+
+    @app.get("/api/v1/auth/admin/users/{user_id}/sessions")
+    async def admin_user_sessions_route(request: Request, user_id: int):
+        api_gateway_logger.info(f"Admin user sessions route called for user {user_id}")
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{settings_instance.AUTH_SERVICE_URL}/api/v1/auth/admin/users/{user_id}/sessions",
+                headers=request.headers
+            )
+            return response.json()
+
+    @app.delete("/api/v1/auth/admin/users/{user_id}/sessions")
+    async def admin_terminate_sessions_route(request: Request, user_id: int):
+        api_gateway_logger.info(f"Admin terminate sessions route called for user {user_id}")
+        async with httpx.AsyncClient() as client:
+            response = await client.delete(
+                f"{settings_instance.AUTH_SERVICE_URL}/api/v1/auth/admin/users/{user_id}/sessions",
                 headers=request.headers
             )
             return response.json()

@@ -223,6 +223,7 @@ class User(Base):
     phone = Column(String(20))
     additional_phone = Column(String(20))  # Alternative phone for login
     password_hash = Column(String(255), nullable=False)
+    is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 

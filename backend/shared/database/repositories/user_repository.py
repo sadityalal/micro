@@ -1,6 +1,6 @@
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, or_, update
-from ..models import User, UserRole, Permission, UserRoleAssignment, TenantUser, LoginHistory, Address, UserPreferences, UserConsent, DataDeletionRequest
+from ..models import User, UserRole, Permission, UserRoleAssignment, RolePermission, TenantUser, LoginHistory, Address, UserPreferences, UserConsent, DataDeletionRequest
 from typing import List, Optional, Dict
 from datetime import datetime, timedelta
 import ipaddress
@@ -10,8 +10,155 @@ class UserRepository:
     def __init__(self, db: Session):
         self.db = db
 
-    # ... existing user methods ...
+    # User authentication methods
+    def get_user_by_email(self, email: str, tenant_id: Optional[int] = None) -> Optional[User]:
+        query = self.db.query(User).filter(User.email == email)
+        if tenant_id:
+            query = query.filter(User.tenant_id == tenant_id)
+        return query.first()
 
+    def get_user_by_username(self, username: str, tenant_id: Optional[int] = None) -> Optional[User]:
+        query = self.db.query(User).filter(User.username == username)
+        if tenant_id:
+            query = query.filter(User.tenant_id == tenant_id)
+        return query.first()
+
+    def get_user_by_phone(self, phone: str, tenant_id: Optional[int] = None) -> Optional[User]:
+        query = self.db.query(User).filter(User.phone == phone)
+        if tenant_id:
+            query = query.filter(User.tenant_id == tenant_id)
+        return query.first()
+
+    def get_user_by_additional_phone(self, phone: str, tenant_id: Optional[int] = None) -> Optional[User]:
+        query = self.db.query(User).filter(User.additional_phone == phone)
+        if tenant_id:
+            query = query.filter(User.tenant_id == tenant_id)
+        return query.first()
+
+    def get_user_by_id(self, user_id: int) -> Optional[User]:
+        return self.db.query(User).filter(User.id == user_id).first()
+
+    def get_user_roles(self, user_id: int) -> List[str]:
+        roles = (self.db.query(UserRole.name)
+                 .join(UserRoleAssignment, UserRoleAssignment.role_id == UserRole.id)
+                 .filter(UserRoleAssignment.user_id == user_id)
+                 .all())
+        return [role[0] for role in roles]
+
+    def get_user_permissions(self, user_id: int) -> List[str]:
+        permissions = (self.db.query(Permission.name)
+                       .join(RolePermission, RolePermission.permission_id == Permission.id)
+                       .join(UserRoleAssignment, UserRoleAssignment.role_id == RolePermission.role_id)
+                       .filter(UserRoleAssignment.user_id == user_id)
+                       .all())
+        return [permission[0] for permission in permissions]
+
+    def create_user(self, user_data: dict) -> User:
+        user = User(**user_data)
+        self.db.add(user)
+        self.db.commit()
+        self.db.refresh(user)
+        return user
+
+    def update_user(self, user_id: int, update_data: dict) -> Optional[User]:
+        user = self.get_user_by_id(user_id)
+        if not user:
+            return None
+        for key, value in update_data.items():
+            setattr(user, key, value)
+        self.db.commit()
+        self.db.refresh(user)
+        return user
+
+    def update_user_password(self, user_id: int, new_password_hash: str):
+        user = self.get_user_by_id(user_id)
+        if user:
+            user.password_hash = new_password_hash
+            self.db.commit()
+
+    def log_login_attempt(self, login_data: dict):
+        try:
+            ipaddress.ip_address(login_data.get('ip_address', ''))
+        except ValueError:
+            login_data['ip_address'] = None
+        login_log = LoginHistory(**login_data)
+        self.db.add(login_log)
+        self.db.commit()
+
+    def add_to_tenant(self, tenant_id: int, user_id: int, role_id: int):
+        tenant_user = TenantUser(
+            tenant_id=tenant_id,
+            user_id=user_id,
+            role_id=role_id
+        )
+        self.db.add(tenant_user)
+        self.db.commit()
+
+    def get_recent_login_attempts(self, identifier: str, minutes: int = 10) -> int:
+        since_time = datetime.utcnow() - timedelta(minutes=minutes)
+        return self.db.query(LoginHistory).filter(
+            and_(
+                LoginHistory.attempted_email == identifier,
+                LoginHistory.login_time >= since_time,
+                LoginHistory.status == 'failed'
+            )
+        ).count()
+
+    # Admin functionality methods
+    def get_all_users(self, skip: int = 0, limit: int = 100) -> List[User]:
+        return self.db.query(User).offset(skip).limit(limit).all()
+
+    def get_role_by_id(self, role_id: int):
+        return self.db.query(UserRole).filter(UserRole.id == role_id).first()
+
+    def assign_role_to_user(self, user_id: int, role_id: int, assigned_by: int):
+        # Check if assignment already exists
+        existing = self.db.query(UserRoleAssignment).filter(
+            UserRoleAssignment.user_id == user_id,
+            UserRoleAssignment.role_id == role_id
+        ).first()
+        
+        if not existing:
+            assignment = UserRoleAssignment(
+                user_id=user_id,
+                role_id=role_id,
+                assigned_by=assigned_by
+            )
+            self.db.add(assignment)
+            self.db.commit()
+
+    def get_total_users_count(self) -> int:
+        return self.db.query(User).count()
+
+    def get_active_users_count(self) -> int:
+        return self.db.query(User).filter(User.is_active == True).count()
+
+    def get_login_attempts_count(self, hours: int = 24) -> int:
+        since_time = datetime.utcnow() - timedelta(hours=hours)
+        return self.db.query(LoginHistory).filter(
+            LoginHistory.login_time >= since_time
+        ).count()
+
+    def get_failed_login_attempts_count(self, hours: int = 24) -> int:
+        since_time = datetime.utcnow() - timedelta(hours=hours)
+        return self.db.query(LoginHistory).filter(
+            LoginHistory.login_time >= since_time,
+            LoginHistory.status == 'failed'
+        ).count()
+
+    def get_login_history(self, user_id: Optional[int] = None, hours: int = 24, skip: int = 0, limit: int = 100):
+        query = self.db.query(LoginHistory)
+        
+        if user_id:
+            query = query.filter(LoginHistory.user_id == user_id)
+        
+        if hours:
+            since_time = datetime.utcnow() - timedelta(hours=hours)
+            query = query.filter(LoginHistory.login_time >= since_time)
+        
+        return query.order_by(LoginHistory.login_time.desc()).offset(skip).limit(limit).all()
+
+    # Address management methods
     def create_address(self, user_id: int, address_data: dict) -> Address:
         # If setting as default, unset other defaults
         if address_data.get('is_default'):
@@ -80,6 +227,7 @@ class UserRepository:
         self.db.commit()
         return True
 
+    # User preferences and consents
     def get_user_preferences(self, user_id: int) -> Optional[UserPreferences]:
         return self.db.query(UserPreferences).filter(UserPreferences.user_id == user_id).first()
 
@@ -110,10 +258,11 @@ class UserRepository:
     def get_user_consents(self, user_id: int) -> List[UserConsent]:
         return self.db.query(UserConsent).filter(UserConsent.user_id == user_id).all()
 
+    # Data deletion methods
     def create_data_deletion_request(self, user_id: int, deletion_type: str, scheduled_for: datetime, reason: str = None) -> DataDeletionRequest:
         deletion_request = DataDeletionRequest(
             user_id=user_id,
-            deletion_type=deletion_type,  # 'anonymize', 'full_delete'
+            deletion_type=deletion_type,
             status='pending',
             scheduled_for=scheduled_for,
             reason=reason

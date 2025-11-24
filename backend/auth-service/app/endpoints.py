@@ -60,8 +60,14 @@ async def login(
 
     if not user_data:
         user_repo = UserRepository(db)
+        failed_user = user_repo.get_user_by_email(user_login.login_identifier, tenant_id)
+        if not failed_user:
+            failed_user = user_repo.get_user_by_username(user_login.login_identifier, tenant_id)
+        if not failed_user:
+            failed_user = user_repo.get_user_by_phone(user_login.login_identifier, tenant_id)
+
         user_repo.log_login_attempt({
-            "user_id": None,  # We don't know which user failed
+            "user_id": failed_user.id if failed_user else None,
             "attempted_email": user_login.login_identifier,
             "tenant_id": tenant_id,
             "ip_address": request.client.host,
