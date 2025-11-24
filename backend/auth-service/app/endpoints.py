@@ -52,9 +52,6 @@ async def login(
             )
         tenant_id = tenant.id
 
-    user_repo = UserRepository(db)
-    user = user_repo.get_user_by_email(user_login.login_identifier, tenant_id)
-
     user_data = auth_service.authenticate_user(
         user_login.login_identifier,
         user_login.password,
@@ -62,8 +59,9 @@ async def login(
     )
 
     if not user_data:
+        user_repo = UserRepository(db)
         user_repo.log_login_attempt({
-            "user_id": user.id if user else None,
+            "user_id": None,  # We don't know which user failed
             "attempted_email": user_login.login_identifier,
             "tenant_id": tenant_id,
             "ip_address": request.client.host,
@@ -84,6 +82,7 @@ async def login(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
+    user_repo = UserRepository(db)
     user_repo.log_login_attempt({
         "user_id": user_data["id"],
         "attempted_email": user_login.login_identifier,

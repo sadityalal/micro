@@ -316,7 +316,7 @@ class DataDeletionRequest(Base):
     scheduled_for = Column(DateTime, nullable=False)
     created_at = Column(DateTime, server_default=func.now())
     completed_at = Column(DateTime)
-    metadata = Column(JSON)
+    request_metadata = Column(JSON)  # FIXED: Changed from 'metadata' to 'request_metadata'
 
 class AuditLog(Base):
     __tablename__ = "audit_logs"
@@ -505,7 +505,7 @@ class InfrastructureSettings(Base):
     timeout_seconds = Column(Integer, default=30)
     status = Column(Enum(ServiceStatus), default='active')
     health_check_url = Column(String(500))
-    config_metadata = Column('metadata', JSON)
+    config_metadata = Column('metadata', JSON)  # CORRECT: Maps to 'metadata' column but uses config_metadata as attribute
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
