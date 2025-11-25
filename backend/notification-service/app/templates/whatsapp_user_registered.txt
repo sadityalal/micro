@@ -1,0 +1,12 @@
+🎉 Welcome to *{{ tenant_name }}*!
+
+Hello {{ user_first_name }}! Your account has been successfully created.
+
+*Account Details:*
+📧 Email: {{ user_email }}
+👤 Username: {{ username }}
+📅 Registered: {{ registration_date }}
+
+Thank you for joining us! Start shopping now.
+
+For support, contact us.

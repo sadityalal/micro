@@ -325,3 +325,19 @@ class UserRepository:
             request.status = 'completed'
             request.completed_at = datetime.utcnow()
             self.db.commit()
+
+    def get_users_by_role(self, role_names: List[str]) -> List[User]:
+        """Get users by role names"""
+        return (self.db.query(User)
+                .join(UserRoleAssignment, UserRoleAssignment.user_id == User.id)
+                .join(UserRole, UserRole.id == UserRoleAssignment.role_id)
+                .filter(UserRole.name.in_(role_names))
+                .all())
+
+    def get_tenant_notification_settings(self, tenant_id: int) -> Dict[str, str]:
+        """Get notification settings for a tenant"""
+        from ..models import TenantNotificationSettings
+        settings = self.db.query(TenantNotificationSettings).filter(
+            TenantNotificationSettings.tenant_id == tenant_id
+        ).all()
+        return {setting.setting_key: setting.setting_value for setting in settings}

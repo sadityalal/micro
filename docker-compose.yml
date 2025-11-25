@@ -21,7 +21,6 @@ services:
       timeout: 10s
       retries: 3
       start_period: 40s
-
   user-service:
     build:
       context: ./backend
@@ -46,6 +45,30 @@ services:
       retries: 3
       start_period: 40s
 
+  notification-service:
+    build:
+      context: ./backend
+      dockerfile: notification-service/Dockerfile
+    ports:
+      - "8005:8005"
+    environment:
+      - DATABASE_URL=postgresql://admin:admin123@postgres:5432/pavitra_db
+      - REDIS_URL=redis://redis:6379/0
+      - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672/
+      - NOTIFICATION_SERVICE_HOST=0.0.0.0
+      - NOTIFICATION_SERVICE_PORT=8005
+    networks:
+      - microservices-network
+    restart: unless-stopped
+    volumes:
+      - ./logs:/app/logs
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8005/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
   api-gateway:
     build:
       context: ./backend
@@ -57,6 +80,7 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - AUTH_SERVICE_URL=http://auth-service:8000
       - USER_SERVICE_URL=http://user-service:8001
+      - NOTIFICATION_SERVICE_URL=http://notification-service:8005
       - API_GATEWAY_HOST=0.0.0.0
       - API_GATEWAY_PORT=8080
     networks:
@@ -70,7 +94,6 @@ services:
       timeout: 10s
       retries: 3
       start_period: 40s
-
 networks:
   microservices-network:
     external: true

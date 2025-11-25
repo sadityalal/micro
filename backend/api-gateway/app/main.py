@@ -495,6 +495,61 @@ def create_app():
             "roles": roles
         }
 
+    @app.post("/api/v1/notifications/send")
+    async def send_notification(request: Request):
+        api_gateway_logger.info("Send notification route called")
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{settings_instance.NOTIFICATION_SERVICE_URL}/api/v1/notifications/send",
+                content=await request.body(),
+                headers=request.headers
+            )
+            return response.json()
+
+    @app.post("/api/v1/notifications/user-registered")
+    async def notify_user_registered(request: Request):
+        api_gateway_logger.info("User registered notification route called")
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{settings_instance.NOTIFICATION_SERVICE_URL}/api/v1/notifications/user-registered",
+                content=await request.body(),
+                headers=request.headers
+            )
+            return response.json()
+
+    @app.post("/api/v1/notifications/password-reset")
+    async def notify_password_reset(request: Request):
+        api_gateway_logger.info("Password reset notification route called")
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{settings_instance.NOTIFICATION_SERVICE_URL}/api/v1/notifications/password-reset",
+                content=await request.body(),
+                headers=request.headers
+            )
+            return response.json()
+
+    @app.post("/api/v1/notifications/forgot-password-otp")
+    async def notify_forgot_password_otp(request: Request):
+        api_gateway_logger.info("Forgot password OTP notification route called")
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{settings_instance.NOTIFICATION_SERVICE_URL}/api/v1/notifications/forgot-password-otp",
+                content=await request.body(),
+                headers=request.headers
+            )
+            return response.json()
+
+    @app.post("/api/v1/notifications/login-otp")
+    async def notify_login_otp(request: Request):
+        api_gateway_logger.info("Login OTP notification route called")
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{settings_instance.NOTIFICATION_SERVICE_URL}/api/v1/notifications/login-otp",
+                content=await request.body(),
+                headers=request.headers
+            )
+            return response.json()
+
     return app
 
 app = create_app()

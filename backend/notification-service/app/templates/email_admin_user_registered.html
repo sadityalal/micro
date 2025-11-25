@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <style>
+        body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+        .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+        .header { background: #DC2626; color: white; padding: 20px; text-align: center; }
+        .content { padding: 20px; background: #f9f9f9; }
+        .footer { padding: 20px; text-align: center; font-size: 12px; color: #666; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>New User Registration - {{ tenant_name }}</h1>
+        </div>
+        <div class="content">
+            <h2>New User Registered</h2>
+            <p>A new user has registered on {{ tenant_name }}.</p>
+            <p><strong>User Details:</strong></p>
+            <ul>
+                <li><strong>Name:</strong> {{ user_first_name }} {{ user_last_name }}</li>
+                <li><strong>Email:</strong> {{ user_email }}</li>
+                <li><strong>Phone:</strong> {{ user_phone }}</li>
+                <li><strong>Registration Date:</strong> {{ registration_date }}</li>
+                <li><strong>User ID:</strong> {{ user_id }}</li>
+            </ul>
+            <p>Total registered users: {{ total_users_count }}</p>
+        </div>
+        <div class="footer">
+            <p>&copy; {{ current_year }} {{ tenant_name }} Admin. All rights reserved.</p>
+        </div>
+    </div>
+</body>
+</html>
