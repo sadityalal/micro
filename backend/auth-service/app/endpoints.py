@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Request, Body, Response
+from fastapi import APIRouter, Depends, HTTPException, status, Request, Body, Response, BackgroundTasks
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from shared.database.connection import get_db, get_redis
 from shared.database.repositories.user_repository import UserRepository
@@ -8,6 +8,7 @@ from shared.schemas.auth import (
     PasswordResetRequest, PasswordResetConfirm, ChangePassword
 )
 from .auth import AuthService
+from .notification_helper import NotificationHelper
 from shared.logger import auth_service_logger
 from sqlalchemy.orm import Session
 import redis
@@ -117,6 +118,7 @@ async def login(
 @router.post("/register", response_model=UserResponse)
 async def register(
         user_create: UserCreate,
+        background_tasks: BackgroundTasks,
         auth_service: AuthService = Depends(get_auth_service),
         db: Session = Depends(get_db)
 ):
@@ -199,6 +201,40 @@ async def register(
 
     # ALWAYS assign customer role through tenant association
     user_repo.add_to_tenant(tenant_id, user.id, 4)
+
+    # ✅ SEND NOTIFICATIONS - Uses user_notification_preferences table
+    # 1. Notify the new user (welcome message)
+    background_tasks.add_task(
+        NotificationHelper.send_notification,
+        event_type="user_registered",
+        tenant_id=tenant_id,
+        recipient_id=user.id,
+        data={
+            "user_first_name": user.first_name,
+            "user_last_name": user.last_name,
+            "user_email": user.email,
+            "username": user.username,
+            "registration_date": user.created_at.isoformat()
+        },
+        priority="medium"
+    )
+
+    # 2. Notify admins about new registration
+    background_tasks.add_task(
+        NotificationHelper.send_notification,
+        event_type="user_registered",
+        tenant_id=tenant_id,
+        data={
+            "user_id": user.id,
+            "user_first_name": user.first_name,
+            "user_last_name": user.last_name,
+            "user_email": user.email,
+            "user_phone": user.phone,
+            "username": user.username,
+            "registration_date": user.created_at.isoformat()
+        },
+        priority="medium"
+    )
 
     auth_service_logger.info(
         "User registration successful",

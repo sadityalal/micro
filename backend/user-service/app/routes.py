@@ -867,3 +867,92 @@ async def export_user_data(
     logger.info("User data exported", extra={"user_id": user_id})
     
     return export_data
+
+@router.get("/notification-preferences", response_model=UserNotificationPreferences)
+async def get_notification_preferences(
+    request: Request,
+    user_repo: UserRepository = Depends(get_user_repository)
+):
+    user_id = request.state.user_id
+    preferences_dict = user_repo.get_user_notification_preferences(user_id)
+    
+    preferences = []
+    for method, enabled in preferences_dict.items():
+        preferences.append(NotificationPreference(
+            notification_method=method,
+            is_enabled=enabled
+        ))
+    
+    return UserNotificationPreferences(preferences=preferences)
+
+@router.put("/notification-preferences", response_model=UserNotificationPreferences)
+async def update_notification_preferences(
+    request: Request,
+    preferences_data: UserNotificationPreferences,
+    user_repo: UserRepository = Depends(get_user_repository),
+    ip_address: str = Depends(get_client_ip),
+    user_agent: str = Depends(get_user_agent)
+):
+    user_id = request.state.user_id
+    
+    # Convert to dict for repository
+    preferences_dict = {}
+    for pref in preferences_data.preferences:
+        preferences_dict[pref.notification_method.value] = pref.is_enabled
+    
+    user_repo.set_user_notification_preferences(user_id, preferences_dict)
+    
+    log_audit_event(
+        user_id=user_id,
+        action="notification_preferences_updated",
+        resource_type="notification_preferences",
+        new_values=preferences_dict,
+        ip_address=ip_address,
+        user_agent=user_agent
+    )
+    
+    logger.info("User notification preferences updated", extra={"user_id": user_id})
+    
+    # Return updated preferences
+    updated_preferences_dict = user_repo.get_user_notification_preferences(user_id)
+    updated_preferences = []
+    for method, enabled in updated_preferences_dict.items():
+        updated_preferences.append(NotificationPreference(
+            notification_method=method,
+            is_enabled=enabled
+        ))
+    
+    return UserNotificationPreferences(preferences=updated_preferences)
+
+@router.put("/notification-preferences/{notification_method}")
+async def update_single_notification_preference(
+    notification_method: NotificationType,
+    is_enabled: bool,
+    request: Request,
+    user_repo: UserRepository = Depends(get_user_repository),
+    ip_address: str = Depends(get_client_ip),
+    user_agent: str = Depends(get_user_agent)
+):
+    user_id = request.state.user_id
+    
+    user_repo.update_user_notification_preference(user_id, notification_method.value, is_enabled)
+    
+    log_audit_event(
+        user_id=user_id,
+        action="notification_preference_updated",
+        resource_type="notification_preference",
+        new_values={notification_method.value: is_enabled},
+        ip_address=ip_address,
+        user_agent=user_agent
+    )
+    
+    logger.info(
+        "Single notification preference updated",
+        extra={
+            "user_id": user_id,
+            "notification_method": notification_method.value,
+            "is_enabled": is_enabled
+        }
+    )
+    
+    return {"message": f"Notification preference for {notification_method.value} updated successfully"}

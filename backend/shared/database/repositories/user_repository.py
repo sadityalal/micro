@@ -341,3 +341,63 @@ class UserRepository:
             TenantNotificationSettings.tenant_id == tenant_id
         ).all()
         return {setting.setting_key: setting.setting_value for setting in settings}
+    def get_user_notification_preferences(self, user_id: int) -> Dict[str, bool]:
+        """Get all notification preferences for a user"""
+        from ..models import UserNotificationPreference
+        preferences = self.db.query(UserNotificationPreference).filter(
+            UserNotificationPreference.user_id == user_id
+        ).all()
+        
+        return {pref.notification_method.value: pref.is_enabled for pref in preferences}
+
+    def update_user_notification_preference(self, user_id: int, notification_method: str, is_enabled: bool):
+        """Update specific notification preference for a user"""
+        from ..models import UserNotificationPreference, NotificationType
+        from sqlalchemy.dialects.postgresql import ENUM
+        
+        # Convert string to enum
+        method_enum = NotificationType(notification_method)
+        
+        preference = self.db.query(UserNotificationPreference).filter(
+            UserNotificationPreference.user_id == user_id,
+            UserNotificationPreference.notification_method == method_enum
+        ).first()
+        
+        if preference:
+            preference.is_enabled = is_enabled
+            preference.updated_at = datetime.utcnow()
+        else:
+            preference = UserNotificationPreference(
+                user_id=user_id,
+                notification_method=method_enum,
+                is_enabled=is_enabled
+            )
+            self.db.add(preference)
+        
+        self.db.commit()
+        return preference
+
+    def set_user_notification_preferences(self, user_id: int, preferences: Dict[str, bool]):
+        """Set multiple notification preferences at once"""
+        for method, enabled in preferences.items():
+            self.update_user_notification_preference(user_id, method, enabled)
+
+    def get_users_with_notification_enabled(self, notification_method: str, roles: List[str] = None):
+        """Get users who have specific notification method enabled, optionally filtered by roles"""
+        from ..models import UserNotificationPreference, NotificationType, UserRole, UserRoleAssignment
+        
+        query = (self.db.query(User)
+                .join(UserNotificationPreference, UserNotificationPreference.user_id == User.id)
+                .filter(
+                    UserNotificationPreference.notification_method == NotificationType(notification_method),
+                    UserNotificationPreference.is_enabled == True,
+                    User.is_active == True
+                ))
+        
+        if roles:
+            query = (query
+                    .join(UserRoleAssignment, UserRoleAssignment.user_id == User.id)
+                    .join(UserRole, UserRole.id == UserRoleAssignment.role_id)
+                    .filter(UserRole.name.in_(roles)))
+        
+        return query.all()

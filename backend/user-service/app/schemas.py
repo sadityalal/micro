@@ -13,6 +13,13 @@ class ConsentType(str, Enum):
     COOKIES = "cookies"
     TERMS_OF_SERVICE = "terms_of_service"
 
+class NotificationType(str, Enum):
+    EMAIL = "email"
+    SMS = "sms"
+    WHATSAPP = "whatsapp"
+    TELEGRAM = "telegram"
+    PUSH = "push"
+
 class UserProfileResponse(BaseModel):
     id: int
     first_name: str
@@ -53,8 +60,24 @@ class PasswordChangeRequest(BaseModel):
             raise ValueError('Password must contain at least one digit')
         return v
 
+class NotificationPreference(BaseModel):
+    notification_method: NotificationType
+    is_enabled: bool
+
+class UserNotificationPreferences(BaseModel):
+    preferences: List[NotificationPreference]
+
+class UserPreferences(BaseModel):
+    language: Optional[str] = "en"
+    currency: Optional[str] = "USD"
+    timezone: Optional[str] = "UTC"
+    email_notifications: Optional[bool] = True
+    sms_notifications: Optional[bool] = False
+    marketing_emails: Optional[bool] = False
+    two_factor_enabled: Optional[bool] = False
+
 class AddressCreate(BaseModel):
-    type: str  # home, work, billing, shipping
+    type: str
     address_line1: str
     address_line2: Optional[str] = None
     city: str
@@ -92,15 +115,6 @@ class AddressUpdate(BaseModel):
     country: Optional[str] = None
     postal_code: Optional[str] = None
     is_default: Optional[bool] = None
-
-class UserPreferences(BaseModel):
-    language: Optional[str] = "en"
-    currency: Optional[str] = "USD"
-    timezone: Optional[str] = "UTC"
-    email_notifications: Optional[bool] = True
-    sms_notifications: Optional[bool] = False
-    marketing_emails: Optional[bool] = False
-    two_factor_enabled: Optional[bool] = False
 
 class SessionResponse(BaseModel):
     session_id: str
