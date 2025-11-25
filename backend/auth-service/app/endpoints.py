@@ -12,7 +12,6 @@ from .notification_helper import NotificationHelper
 from shared.logger import auth_service_logger
 from sqlalchemy.orm import Session
 import redis
-
 router = APIRouter()
 security = HTTPBearer()
 
@@ -20,7 +19,6 @@ def get_auth_service(db: Session = Depends(get_db), redis_client: redis.Redis = 
     user_repo = UserRepository(db)
     tenant_repo = TenantRepository(db)
     return AuthService(user_repo, tenant_repo, redis_client)
-
 
 @router.post("/login", response_model=Token)
 async def login(
@@ -37,7 +35,6 @@ async def login(
             "client_ip": request.client.host
         }
     )
-
     tenant_id = None
     if user_login.tenant_domain:
         tenant_repo = TenantRepository(db)
@@ -52,13 +49,11 @@ async def login(
                 detail="Tenant not found"
             )
         tenant_id = tenant.id
-
     user_data = auth_service.authenticate_user(
         user_login.login_identifier,
         user_login.password,
         tenant_id
     )
-
     if not user_data:
         user_repo = UserRepository(db)
         failed_user = user_repo.get_user_by_email(user_login.login_identifier, tenant_id)
@@ -66,7 +61,6 @@ async def login(
             failed_user = user_repo.get_user_by_username(user_login.login_identifier, tenant_id)
         if not failed_user:
             failed_user = user_repo.get_user_by_phone(user_login.login_identifier, tenant_id)
-
         user_repo.log_login_attempt({
             "user_id": failed_user.id if failed_user else None,
             "attempted_email": user_login.login_identifier,
@@ -88,7 +82,6 @@ async def login(
             detail="Incorrect login identifier or password",
             headers={"WWW-Authenticate": "Bearer"},
         )
-
     user_repo = UserRepository(db)
     user_repo.log_login_attempt({
         "user_id": user_data["id"],
@@ -98,9 +91,7 @@ async def login(
         "device_info": {"user_agent": request.headers.get("user-agent")},
         "status": "success"
     })
-
     tokens = await auth_service.create_tokens(user_data, tenant_id or user_data["tenant_id"], request)
-
     auth_service_logger.info(
         "Login successful",
         extra={
@@ -111,9 +102,7 @@ async def login(
             "permissions": user_data["permissions"]
         }
     )
-
     return tokens
-
 
 @router.post("/register", response_model=UserResponse)
 async def register(
@@ -131,11 +120,8 @@ async def register(
             "first_name": user_create.first_name
         }
     )
-
     user_repo = UserRepository(db)
     tenant_repo = TenantRepository(db)
-
-    # Check if email already exists
     existing_user = user_repo.get_user_by_email(user_create.email)
     if existing_user:
         auth_service_logger.warning(
@@ -146,8 +132,6 @@ async def register(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="User with this email already exists"
         )
-
-    # Check if username already exists (if provided)
     if user_create.username:
         existing_username = user_repo.get_user_by_username(user_create.username)
         if existing_username:
@@ -159,8 +143,6 @@ async def register(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Username already taken"
             )
-
-    # MAKE TENANT DOMAIN REQUIRED
     if not user_create.tenant_domain:
         auth_service_logger.warning(
             "Registration failed - tenant domain required",
@@ -170,7 +152,6 @@ async def register(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Tenant domain is required for registration"
         )
-
     tenant = tenant_repo.get_tenant_by_domain(user_create.tenant_domain)
     if not tenant:
         auth_service_logger.warning(
@@ -182,10 +163,7 @@ async def register(
             detail="Tenant not found"
         )
     tenant_id = tenant.id
-
-    # Set username - use email if not provided
     username = user_create.username or user_create.email
-
     hashed_password = auth_service.get_password_hash(user_create.password)
     user_data = {
         "first_name": user_create.first_name,
@@ -196,53 +174,41 @@ async def register(
         "password_hash": hashed_password,
         "tenant_id": tenant_id
     }
-
     user = user_repo.create_user(user_data)
-
-    # ALWAYS assign customer role through tenant association
     user_repo.add_to_tenant(tenant_id, user.id, 4)
-
-    # ✅ SET DEFAULT NOTIFICATION PREFERENCES for the new user
     user_repo.set_default_notification_preferences(user.id, is_admin=False)
     auth_service_logger.info(
         "Default notification preferences set for new user",
         extra={"user_id": user.id, "is_admin": False}
     )
-
-    # ✅ SEND NOTIFICATIONS - Uses user_notification_preferences table
-    # 1. Notify the new user (welcome message)
     background_tasks.add_task(
-        NotificationHelper.send_notification,
-        event_type="user_registered",
+        NotificationHelper.send_user_registered_notification,
         tenant_id=tenant_id,
-        recipient_id=user.id,
-        data={
-            "user_first_name": user.first_name,
-            "user_last_name": user.last_name,
-            "user_email": user.email,
+        user_data={
+            "id": user.id,
+            "first_name": user.first_name,
+            "last_name": user.last_name,
+            "email": user.email,
+            "phone": user.phone,
             "username": user.username,
-            "registration_date": user.created_at.isoformat()
+            "created_at": user.created_at.isoformat()
         },
-        priority="medium"
+        is_admin=False
     )
-
-    # 2. Notify admins about new registration
     background_tasks.add_task(
-        NotificationHelper.send_notification,
-        event_type="user_registered",
+        NotificationHelper.send_user_registered_notification,
         tenant_id=tenant_id,
-        data={
-            "user_id": user.id,
-            "user_first_name": user.first_name,
-            "user_last_name": user.last_name,
-            "user_email": user.email,
-            "user_phone": user.phone,
+        user_data={
+            "id": user.id,
+            "first_name": user.first_name,
+            "last_name": user.last_name,
+            "email": user.email,
+            "phone": user.phone,
             "username": user.username,
-            "registration_date": user.created_at.isoformat()
+            "created_at": user.created_at.isoformat()
         },
-        priority="medium"
+        is_admin=True
     )
-
     auth_service_logger.info(
         "User registration successful",
         extra={
@@ -252,7 +218,6 @@ async def register(
             "tenant_id": tenant_id
         }
     )
-
     return UserResponse(
         id=user.id,
         first_name=user.first_name,
@@ -273,7 +238,6 @@ async def refresh_token(
         "Token refresh attempt",
         extra={"tenant_id": tenant_id}
     )
-
     token_data = auth_service.validate_refresh_token(refresh_token, tenant_id)
     if not token_data:
         auth_service_logger.warning(
@@ -284,7 +248,6 @@ async def refresh_token(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid refresh token"
         )
-
     db = next(get_db())
     user_repo = UserRepository(db)
     user = user_repo.get_user_by_id(token_data.user_id)
@@ -297,7 +260,6 @@ async def refresh_token(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="User not found"
         )
-
     user_data = {
         "id": user.id,
         "email": user.email,
@@ -307,9 +269,7 @@ async def refresh_token(
         "roles": token_data.roles,
         "permissions": token_data.permissions
     }
-
     tokens = await auth_service.create_tokens(user_data, tenant_id)
-    
     auth_service_logger.info(
         "Token refresh successful",
         extra={
@@ -317,7 +277,6 @@ async def refresh_token(
             "tenant_id": tenant_id
         }
     )
-    
     return tokens
 
 @router.post("/verify")
@@ -330,7 +289,6 @@ async def verify_token(
         "Token verification attempt",
         extra={"tenant_id": tenant_id}
     )
-
     token_data = auth_service.verify_token(token, tenant_id)
     if not token_data:
         auth_service_logger.warning(
@@ -341,7 +299,6 @@ async def verify_token(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired token"
         )
-
     db = next(get_db())
     user_repo = UserRepository(db)
     user = user_repo.get_user_by_id(token_data.user_id)
@@ -354,7 +311,6 @@ async def verify_token(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="User not found"
         )
-
     auth_service_logger.info(
         "Token verification successful",
         extra={
@@ -363,7 +319,6 @@ async def verify_token(
             "tenant_id": tenant_id
         }
     )
-    
     return {
         "user_id": user.id,
         "email": user.email,
@@ -384,25 +339,20 @@ async def logout(
 ):
     token = credentials.credentials
     auth_service_logger.info("Logout attempt")
-    
     tenant_repo = TenantRepository(db)
     tenants = tenant_repo.get_all_active_tenants()
-    
     token_data = None
     for tenant in tenants:
         token_data = auth_service.verify_token(token, tenant.id)
         if token_data:
             break
-
     if not token_data:
         auth_service_logger.warning("Logout failed - invalid token")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid token"
         )
-
     await auth_service.logout_user(token_data.user_id, token_data.tenant_id, token)
-    
     auth_service_logger.info(
         "Logout successful",
         extra={
@@ -410,7 +360,6 @@ async def logout(
             "tenant_id": token_data.tenant_id
         }
     )
-    
     return {"message": "Successfully logged out"}
 
 @router.get("/admin/management")
@@ -421,23 +370,18 @@ async def admin_management(
 ):
     token = credentials.credentials
     auth_service_logger.info("Admin management access attempt")
-    
     tenant_repo = TenantRepository(db)
     tenants = tenant_repo.get_all_active_tenants()
-    
     token_data = None
     for tenant in tenants:
         auth_service = get_auth_service(db, get_redis())
         token_data = auth_service.verify_token(token, tenant.id)
         if token_data:
             break
-
     if not token_data:
         auth_service_logger.warning("Admin access denied - invalid token")
         raise HTTPException(status_code=401, detail="Invalid token")
-
     user_roles = token_data.roles
-    
     if "admin" in user_roles or "super_admin" in user_roles:
         auth_service_logger.info(
             "Admin management access granted",

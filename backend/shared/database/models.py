@@ -584,7 +584,7 @@ class UserNotificationPreference(Base):
     __tablename__ = "user_notification_preferences"
     id = Column(BigInteger, primary_key=True)
     user_id = Column(BigInteger, ForeignKey("users.id"), nullable=False)
-    notification_method = Column(Enum(NotificationType), nullable=False)
+    notification_method = Column(Enum(NotificationType, name='notification_type'), nullable=False)
     is_enabled = Column(Boolean, default=True)
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())

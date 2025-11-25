@@ -410,20 +410,20 @@ class UserRepository:
         if is_admin:
             # Admins get all notifications enabled by default
             default_preferences = {
-                NotificationType.EMAIL: True,
-                NotificationType.SMS: True,
-                NotificationType.WHATSAPP: True,
-                NotificationType.TELEGRAM: True,
-                NotificationType.PUSH: True
+                NotificationType.email: True,
+                NotificationType.sms: True,
+                NotificationType.whatsapp: True,
+                NotificationType.telegram: True,
+                NotificationType.push: True
             }
         else:
             # Regular users get email enabled, others disabled by default
             default_preferences = {
-                NotificationType.EMAIL: True,
-                NotificationType.SMS: False,
-                NotificationType.WHATSAPP: False,
-                NotificationType.TELEGRAM: False,
-                NotificationType.PUSH: False
+                NotificationType.email: True,
+                NotificationType.sms: False,
+                NotificationType.whatsapp: False,
+                NotificationType.telegram: False,
+                NotificationType.push: False
             }
         
         for method, enabled in default_preferences.items():
