@@ -401,3 +401,38 @@ class UserRepository:
                     .filter(UserRole.name.in_(roles)))
         
         return query.all()
+
+    def set_default_notification_preferences(self, user_id: int, is_admin: bool = False):
+        """Set default notification preferences for a user"""
+        from ..models import UserNotificationPreference, NotificationType
+        
+        # Default preferences based on user type
+        if is_admin:
+            # Admins get all notifications enabled by default
+            default_preferences = {
+                NotificationType.EMAIL: True,
+                NotificationType.SMS: True,
+                NotificationType.WHATSAPP: True,
+                NotificationType.TELEGRAM: True,
+                NotificationType.PUSH: True
+            }
+        else:
+            # Regular users get email enabled, others disabled by default
+            default_preferences = {
+                NotificationType.EMAIL: True,
+                NotificationType.SMS: False,
+                NotificationType.WHATSAPP: False,
+                NotificationType.TELEGRAM: False,
+                NotificationType.PUSH: False
+            }
+        
+        for method, enabled in default_preferences.items():
+            preference = UserNotificationPreference(
+                user_id=user_id,
+                notification_method=method,
+                is_enabled=enabled
+            )
+            self.db.add(preference)
+        
+        self.db.commit()
+        return default_preferences

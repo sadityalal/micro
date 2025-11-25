@@ -1176,6 +1176,44 @@ INSERT INTO tenant_notification_settings (tenant_id, setting_key, setting_value,
 ON CONFLICT (tenant_id, setting_key) DO UPDATE SET
     setting_value = EXCLUDED.setting_value,
     updated_at = CURRENT_TIMESTAMP;
+
+
+-- Setup notification preferences for existing admin users
+INSERT INTO user_notification_preferences (user_id, notification_method, is_enabled, created_at, updated_at)
+VALUES
+    -- Admin user (user_id = 1) - Enable all notification methods
+    (1, 'email', true, NOW(), NOW()),
+    (1, 'sms', true, NOW(), NOW()),
+    (1, 'whatsapp', true, NOW(), NOW()),
+    (1, 'telegram', true, NOW(), NOW()),
+    (1, 'push', true, NOW(), NOW())
+ON CONFLICT (user_id, notification_method)
+DO UPDATE SET
+    is_enabled = EXCLUDED.is_enabled,
+    updated_at = NOW();
+
+-- Also set telegram_chat_id for admin if available
+UPDATE users SET telegram_chat_id = 'YOUR_ADMIN_CHAT_ID' WHERE id = 1;
+
+-- Setup for any other existing users (disable non-email by default)
+INSERT INTO user_notification_preferences (user_id, notification_method, is_enabled, created_at, updated_at)
+SELECT
+    u.id,
+    unm.notification_method,
+    CASE
+        WHEN unm.notification_method = 'email' THEN true
+        ELSE false
+    END as is_enabled,
+    NOW(),
+    NOW()
+FROM users u
+CROSS JOIN (SELECT unnest(enum_range(NULL::notification_type)) as notification_method) unm
+WHERE u.id > 1  -- Exclude admin
+ON CONFLICT (user_id, notification_method)
+DO UPDATE SET
+    is_enabled = EXCLUDED.is_enabled,
+    updated_at = NOW();
+
 -- =====================================================
 -- DATABASE USER CREATION (ADD AT THE TOP AFTER EXTENSIONS)
 -- =====================================================

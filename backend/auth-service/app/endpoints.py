@@ -202,6 +202,13 @@ async def register(
     # ALWAYS assign customer role through tenant association
     user_repo.add_to_tenant(tenant_id, user.id, 4)
 
+    # ✅ SET DEFAULT NOTIFICATION PREFERENCES for the new user
+    user_repo.set_default_notification_preferences(user.id, is_admin=False)
+    auth_service_logger.info(
+        "Default notification preferences set for new user",
+        extra={"user_id": user.id, "is_admin": False}
+    )
+
     # ✅ SEND NOTIFICATIONS - Uses user_notification_preferences table
     # 1. Notify the new user (welcome message)
     background_tasks.add_task(
