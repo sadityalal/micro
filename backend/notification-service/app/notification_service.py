@@ -181,14 +181,31 @@ class NotificationService:
             raise
 
     async def _get_recipients(self, notification_request: NotificationRequest, user_repo: UserRepository) -> List[Dict]:
-        """Get recipients based on notification type and preferences"""
         recipients = []
-        
+
         if notification_request.event_type == NotificationEventType.USER_REGISTERED:
-            # For user registration, notify admins
+            # For admin notifications
             admins = user_repo.get_users_by_role(["admin", "super_admin"])
             for admin in admins:
                 preferences = user_repo.get_user_preferences(admin.id)
+                notification_prefs = user_repo.get_user_notification_preferences(admin.id)
+
+                # Check if Telegram is enabled for this admin and they have a username
+                if notification_prefs.get('telegram', False):
+                    telegram_username = user_repo.get_user_telegram_username(admin.id)
+                    if telegram_username:
+                        # Ensure username starts with @
+                        if not telegram_username.startswith('@'):
+                            telegram_username = f"@{telegram_username}"
+
+                        recipients.append({
+                            "type": NotificationType.TELEGRAM,
+                            "telegram_username": telegram_username,
+                            "user_id": admin.id,
+                            "is_admin": True
+                        })
+
+                # Also include email for admins
                 if preferences and preferences.email_notifications:
                     recipients.append({
                         "type": NotificationType.EMAIL,
@@ -197,61 +214,59 @@ class NotificationService:
                         "is_admin": True
                     })
         else:
-            # For other events, notify the specific user
+            # For user notifications
             if notification_request.recipient_id:
                 user = user_repo.get_user_by_id(notification_request.recipient_id)
                 if user:
                     preferences = user_repo.get_user_preferences(user.id)
-                    if preferences:
-                        # Add email if enabled
-                        if preferences.email_notifications and user.email:
+                    notification_prefs = user_repo.get_user_notification_preferences(user.id)
+
+                    # Check Telegram preference and username
+                    if notification_prefs.get('telegram', False):
+                        telegram_username = user_repo.get_user_telegram_username(user.id)
+                        if telegram_username:
+                            # Ensure username starts with @
+                            if not telegram_username.startswith('@'):
+                                telegram_username = f"@{telegram_username}"
+
                             recipients.append({
-                                "type": NotificationType.EMAIL,
-                                "email": user.email,
+                                "type": NotificationType.TELEGRAM,
+                                "telegram_username": telegram_username,
                                 "user_id": user.id,
                                 "is_admin": False
                             })
-                        # Add SMS if enabled and phone exists
-                        if preferences.sms_notifications and user.phone:
-                            recipients.append({
-                                "type": NotificationType.SMS,
-                                "phone": user.phone,
-                                "user_id": user.id,
-                                "is_admin": False
-                            })
-            
-            # Also include direct recipient information from request
-            if notification_request.recipient_email:
-                recipients.append({
-                    "type": NotificationType.EMAIL,
-                    "email": notification_request.recipient_email,
-                    "user_id": notification_request.recipient_id,
-                    "is_admin": False
-                })
-            if notification_request.recipient_phone:
-                recipients.append({
-                    "type": NotificationType.SMS,
-                    "phone": notification_request.recipient_phone,
-                    "user_id": notification_request.recipient_id,
-                    "is_admin": False
-                })
+
+                    # Email
+                    if preferences and preferences.email_notifications and user.email:
+                        recipients.append({
+                            "type": NotificationType.EMAIL,
+                            "email": user.email,
+                            "user_id": user.id,
+                            "is_admin": False
+                        })
+
+                    # SMS
+                    if preferences and preferences.sms_notifications and user.phone:
+                        recipients.append({
+                            "type": NotificationType.SMS,
+                            "phone": user.phone,
+                            "user_id": user.id,
+                            "is_admin": False
+                        })
 
         return recipients
 
-    async def _send_notification_to_recipient(self, recipient: Dict, notification_request: NotificationRequest, template_data: Dict):
-        """Send notification to a single recipient"""
+    async def _send_notification_to_recipient(self, recipient: Dict, notification_request: NotificationRequest,
+                                              template_data: Dict):
         try:
             notification_type = recipient["type"]
-            
-            # Render template
             subject, message = self.template_manager.render_template(
                 notification_request.event_type,
                 notification_type,
                 template_data,
                 recipient.get("is_admin", False)
             )
-            
-            # Send via appropriate provider
+
             if notification_type == NotificationType.EMAIL:
                 success = await self.email_provider.send_email(
                     recipient["email"],
@@ -273,7 +288,7 @@ class NotificationService:
                 )
             elif notification_type == NotificationType.TELEGRAM:
                 success = await self.telegram_provider.send_telegram(
-                    recipient.get("telegram_id", recipient.get("user_id")),
+                    recipient["telegram_username"],  # Changed from telegram_chat_id
                     message,
                     notification_request.tenant_id
                 )
@@ -281,13 +296,15 @@ class NotificationService:
                 self.logger.warning(f"Unsupported notification type: {notification_type}")
                 return False
 
+            # Logging remains the same...
             if success:
                 self.logger.info(
                     f"Notification sent successfully",
                     extra={
                         "type": notification_type.value,
                         "event_type": notification_request.event_type.value,
-                        "recipient": recipient.get('email') or recipient.get('phone'),
+                        "recipient": recipient.get('email') or recipient.get('phone') or recipient.get(
+                            'telegram_chat_id'),
                         "tenant_id": notification_request.tenant_id
                     }
                 )
@@ -297,11 +314,11 @@ class NotificationService:
                     extra={
                         "type": notification_type.value,
                         "event_type": notification_request.event_type.value,
-                        "recipient": recipient.get('email') or recipient.get('phone'),
+                        "recipient": recipient.get('email') or recipient.get('phone') or recipient.get(
+                            'telegram_chat_id'),
                         "tenant_id": notification_request.tenant_id
                     }
                 )
-
             return success
 
         except Exception as e:

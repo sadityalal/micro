@@ -108,25 +108,83 @@ class WhatsAppProvider(BaseProvider):
             self.logger.error(f"Failed to send WhatsApp to {to_phone}: {e}")
             return False
 
+
 class TelegramProvider(BaseProvider):
-    async def send_telegram(self, chat_id: str, message: str, tenant_id: int) -> bool:
-        """Send Telegram message using tenant Telegram bot settings"""
+    async def send_telegram(self, username: str, message: str, tenant_id: int) -> bool:
         try:
             bot_token = self._get_tenant_settings(tenant_id, "telegram_bot_token")
 
-            if not bot_token:
-                self.logger.error(f"Missing Telegram configuration for tenant {tenant_id}")
+            self.logger.info(f"Attempting to send Telegram message to username: {username}")
+
+            if not bot_token or bot_token == "dummy_telegram_token":
+                self.logger.error(
+                    f"Telegram bot token not configured or still using dummy token for tenant {tenant_id}")
                 return False
 
-            # Mock implementation - replace with actual Telegram Bot API
-            self.logger.info(f"[MOCK Telegram] To: {chat_id}, Message: {message}")
-            
-            # Simulate API call delay
-            import asyncio
-            await asyncio.sleep(0.1)
-            
-            return True
+            # Validate bot token format
+            if ':' not in bot_token:
+                self.logger.error(f"Invalid Telegram bot token format for tenant {tenant_id}")
+                return False
 
+            # Validate username format (should start with @)
+            if not username or not username.startswith('@'):
+                self.logger.error(f"Invalid Telegram username format: {username}. Should start with @")
+                return False
+
+            username_clean = username.strip()
+
+            # Send message via Telegram Bot API
+            api_url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+
+            payload = {
+                "chat_id": username_clean,  # Telegram API accepts usernames as chat_id
+                "text": message,
+                "parse_mode": "Markdown",
+                "disable_web_page_preview": True
+            }
+
+            self.logger.info(f"Sending Telegram message to username: {username_clean}")
+
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.post(api_url, json=payload)
+
+                if response.status_code == 200:
+                    result = response.json()
+                    if result.get("ok"):
+                        self.logger.info(
+                            "Telegram message sent successfully",
+                            extra={
+                                "username": username_clean,
+                                "message_length": len(message),
+                                "tenant_id": tenant_id
+                            }
+                        )
+                        return True
+                    else:
+                        error_desc = result.get('description', 'Unknown error')
+                        self.logger.error(
+                            f"Telegram API error: {error_desc}",
+                            extra={
+                                "username": username_clean,
+                                "tenant_id": tenant_id,
+                                "error_code": result.get('error_code')
+                            }
+                        )
+                        return False
+                else:
+                    self.logger.error(
+                        f"Telegram API HTTP error: {response.status_code} - {response.text}",
+                        extra={
+                            "username": username_clean,
+                            "tenant_id": tenant_id,
+                            "status_code": response.status_code
+                        }
+                    )
+                    return False
+
+        except httpx.TimeoutException:
+            self.logger.error(f"Telegram API timeout for username {username}")
+            return False
         except Exception as e:
-            self.logger.error(f"Failed to send Telegram to {chat_id}: {e}")
+            self.logger.error(f"Failed to send Telegram to {username}: {str(e)}", exc_info=True)
             return False

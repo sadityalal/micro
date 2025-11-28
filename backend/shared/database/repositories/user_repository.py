@@ -402,6 +402,20 @@ class UserRepository:
         
         return query.all()
 
+    def get_user_telegram_username(self, user_id: int) -> Optional[str]:
+        user = self.get_user_by_id(user_id)
+        if user and user.telegram_username:
+            telegram_id = str(user.telegram_username).strip()
+            # If it's numeric, it's a chat ID, otherwise it's a username
+            if telegram_id.isdigit():
+                return telegram_id  # Return as chat ID
+            else:
+                # It's a username - ensure it starts with @
+                if not telegram_id.startswith('@'):
+                    return f"@{telegram_id}"
+                return telegram_id
+        return None
+
     def set_default_notification_preferences(self, user_id: int, is_admin: bool = False):
         """Set default notification preferences for a user"""
         from ..models import UserNotificationPreference, NotificationType
