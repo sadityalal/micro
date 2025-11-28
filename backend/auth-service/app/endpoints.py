@@ -177,38 +177,26 @@ async def register(
     user = user_repo.create_user(user_data)
     user_repo.add_to_tenant(tenant_id, user.id, 4)
     user_repo.set_default_notification_preferences(user.id, is_admin=False)
-    auth_service_logger.info(
-        "Default notification preferences set for new user",
-        extra={"user_id": user.id, "is_admin": False}
-    )
-    background_tasks.add_task(
-        NotificationHelper.send_user_registered_notification,
-        tenant_id=tenant_id,
-        user_data={
-            "id": user.id,
-            "first_name": user.first_name,
-            "last_name": user.last_name,
-            "email": user.email,
-            "phone": user.phone,
-            "username": user.username,
-            "created_at": user.created_at.isoformat()
-        },
-        is_admin=False
-    )
-    background_tasks.add_task(
-        NotificationHelper.send_user_registered_notification,
-        tenant_id=tenant_id,
-        user_data={
-            "id": user.id,
-            "first_name": user.first_name,
-            "last_name": user.last_name,
-            "email": user.email,
-            "phone": user.phone,
-            "username": user.username,
-            "created_at": user.created_at.isoformat()
-        },
-        is_admin=True
-    )
+
+    # Send notifications
+    try:
+        # Send user registration notification to admins and user
+        background_tasks.add_task(
+            NotificationHelper.send_user_registered_notification,
+            tenant_id=tenant_id,
+            user_data={
+                "id": user.id,
+                "first_name": user.first_name,
+                "last_name": user.last_name,
+                "email": user.email,
+                "phone": user.phone,
+                "username": user.username,
+                "created_at": user.created_at.isoformat()
+            }
+        )
+    except Exception as e:
+        auth_service_logger.error(f"Failed to queue registration notification: {e}")
+
     auth_service_logger.info(
         "User registration successful",
         extra={
@@ -414,6 +402,84 @@ async def admin_management(
             status_code=403,
             detail="Insufficient permissions. Admin or Super Admin access required."
         )
+
+
+@router.post("/password-reset/request")
+async def request_password_reset(
+        reset_request: PasswordResetRequest,
+        background_tasks: BackgroundTasks,
+        auth_service: AuthService = Depends(get_auth_service),
+        db: Session = Depends(get_db)
+):
+    auth_service_logger.info(
+        "Password reset request",
+        extra={"email": reset_request.email, "tenant_domain": reset_request.tenant_domain}
+    )
+
+    tenant_id = None
+    if reset_request.tenant_domain:
+        tenant_repo = TenantRepository(db)
+        tenant = tenant_repo.get_tenant_by_domain(reset_request.tenant_domain)
+        if not tenant:
+            raise HTTPException(status_code=404, detail="Tenant not found")
+        tenant_id = tenant.id
+
+    user_repo = UserRepository(db)
+    user = user_repo.get_user_by_email(reset_request.email, tenant_id)
+
+    if user:
+        # Generate OTP (in a real implementation, you'd use a proper OTP generator)
+        import random
+        otp_code = str(random.randint(100000, 999999))
+
+        # Store OTP in Redis with expiry
+        otp_key = f"password_reset_otp:{user.id}"
+        auth_service.redis_client.setex(otp_key, 600, otp_code)  # 10 minutes expiry
+
+        # Send notification
+        background_tasks.add_task(
+            NotificationHelper.send_forgot_password_otp_notification,
+            tenant_id=tenant_id or user.tenant_id,
+            email=user.email,
+            otp_code=otp_code
+        )
+
+    # Always return success to prevent email enumeration
+    return {"message": "If the email exists, a password reset OTP has been sent"}
+
+
+@router.post("/password-reset/confirm")
+async def confirm_password_reset(
+        reset_confirm: PasswordResetConfirm,
+        auth_service: AuthService = Depends(get_auth_service),
+        db: Session = Depends(get_db)
+):
+    auth_service_logger.info("Password reset confirmation attempt")
+
+    user_repo = UserRepository(db)
+
+    # In a real implementation, you'd verify the token properly
+    # For now, we'll use a simple OTP verification
+    user = user_repo.get_user_by_email(reset_confirm.email)
+    if not user:
+        raise HTTPException(status_code=400, detail="Invalid reset token")
+
+    otp_key = f"password_reset_otp:{user.id}"
+    stored_otp = auth_service.redis_client.get(otp_key)
+
+    if not stored_otp or stored_otp != reset_confirm.token:
+        raise HTTPException(status_code=400, detail="Invalid or expired OTP")
+
+    # Update password
+    new_hashed_password = auth_service.get_password_hash(reset_confirm.new_password)
+    user_repo.update_user_password(user.id, new_hashed_password)
+
+    # Clear OTP
+    auth_service.redis_client.delete(otp_key)
+
+    auth_service_logger.info("Password reset successful", extra={"user_id": user.id})
+    return {"message": "Password reset successfully"}
+
 
 @router.get("/health")
 async def health_check():

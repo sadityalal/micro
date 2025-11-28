@@ -121,7 +121,8 @@ class NotificationService:
             tenant_repo = TenantRepository(db)
             
             # Get tenant information
-            tenant = tenant_repo.get_tenant_system_settings(notification_request.tenant_id)
+            from shared.database.models import Tenant
+            tenant = db.query(Tenant).filter(Tenant.id == notification_request.tenant_id).first()
             if not tenant:
                 self.logger.error(f"Tenant not found: {notification_request.tenant_id}")
                 return
@@ -184,20 +185,70 @@ class NotificationService:
         recipients = []
 
         if notification_request.event_type == NotificationEventType.USER_REGISTERED:
-            # For admin notifications
+            # For user registration, send to both the user and admins
+            if notification_request.recipient_id:
+                # Send to the registered user
+                user = user_repo.get_user_by_id(notification_request.recipient_id)
+                if user:
+                    preferences = user_repo.get_user_preferences(user.id)
+                    notification_prefs = user_repo.get_user_notification_preferences(user.id)
+
+                    # Email to user
+                    if preferences and preferences.email_notifications and user.email:
+                        recipients.append({
+                            "type": NotificationType.EMAIL,
+                            "email": user.email,
+                            "user_id": user.id,
+                            "is_admin": False
+                        })
+
+                    # SMS to user
+                    if preferences and preferences.sms_notifications and user.phone:
+                        recipients.append({
+                            "type": NotificationType.SMS,
+                            "phone": user.phone,
+                            "user_id": user.id,
+                            "is_admin": False
+                        })
+
+                    # WhatsApp to user
+                    if notification_prefs.get('whatsapp', False) and user.phone:
+                        recipients.append({
+                            "type": NotificationType.WHATSAPP,
+                            "phone": user.phone,
+                            "user_id": user.id,
+                            "is_admin": False
+                        })
+
+                    # Telegram to user
+                    if notification_prefs.get('telegram', False):
+                        telegram_username = user_repo.get_user_telegram_username(user.id)
+                        if telegram_username:
+                            recipients.append({
+                                "type": NotificationType.TELEGRAM,
+                                "telegram_username": telegram_username,
+                                "user_id": user.id,
+                                "is_admin": False
+                            })
+
+            # Send to all admins
             admins = user_repo.get_users_by_role(["admin", "super_admin"])
             for admin in admins:
-                preferences = user_repo.get_user_preferences(admin.id)
                 notification_prefs = user_repo.get_user_notification_preferences(admin.id)
 
-                # Check if Telegram is enabled for this admin and they have a username
+                # Email to admin
+                if admin.email:
+                    recipients.append({
+                        "type": NotificationType.EMAIL,
+                        "email": admin.email,
+                        "user_id": admin.id,
+                        "is_admin": True
+                    })
+
+                # Telegram to admin
                 if notification_prefs.get('telegram', False):
                     telegram_username = user_repo.get_user_telegram_username(admin.id)
                     if telegram_username:
-                        # Ensure username starts with @
-                        if not telegram_username.startswith('@'):
-                            telegram_username = f"@{telegram_username}"
-
                         recipients.append({
                             "type": NotificationType.TELEGRAM,
                             "telegram_username": telegram_username,
@@ -205,36 +256,24 @@ class NotificationService:
                             "is_admin": True
                         })
 
-                # Also include email for admins
-                if preferences and preferences.email_notifications:
+                # SMS to admin
+                if notification_prefs.get('sms', False) and admin.phone:
                     recipients.append({
-                        "type": NotificationType.EMAIL,
-                        "email": admin.email,
+                        "type": NotificationType.SMS,
+                        "phone": admin.phone,
                         "user_id": admin.id,
                         "is_admin": True
                     })
-        else:
-            # For user notifications
+
+        elif notification_request.event_type in [NotificationEventType.PASSWORD_RESET,
+                                                 NotificationEventType.FORGOT_PASSWORD_OTP,
+                                                 NotificationEventType.LOGIN_OTP]:
+            # For password reset and OTP notifications, only send to the user
             if notification_request.recipient_id:
                 user = user_repo.get_user_by_id(notification_request.recipient_id)
                 if user:
                     preferences = user_repo.get_user_preferences(user.id)
                     notification_prefs = user_repo.get_user_notification_preferences(user.id)
-
-                    # Check Telegram preference and username
-                    if notification_prefs.get('telegram', False):
-                        telegram_username = user_repo.get_user_telegram_username(user.id)
-                        if telegram_username:
-                            # Ensure username starts with @
-                            if not telegram_username.startswith('@'):
-                                telegram_username = f"@{telegram_username}"
-
-                            recipients.append({
-                                "type": NotificationType.TELEGRAM,
-                                "telegram_username": telegram_username,
-                                "user_id": user.id,
-                                "is_admin": False
-                            })
 
                     # Email
                     if preferences and preferences.email_notifications and user.email:
@@ -253,6 +292,26 @@ class NotificationService:
                             "user_id": user.id,
                             "is_admin": False
                         })
+
+                    # WhatsApp
+                    if notification_prefs.get('whatsapp', False) and user.phone:
+                        recipients.append({
+                            "type": NotificationType.WHATSAPP,
+                            "phone": user.phone,
+                            "user_id": user.id,
+                            "is_admin": False
+                        })
+
+                    # Telegram
+                    if notification_prefs.get('telegram', False):
+                        telegram_username = user_repo.get_user_telegram_username(user.id)
+                        if telegram_username:
+                            recipients.append({
+                                "type": NotificationType.TELEGRAM,
+                                "telegram_username": telegram_username,
+                                "user_id": user.id,
+                                "is_admin": False
+                            })
 
         return recipients
 

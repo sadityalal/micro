@@ -221,6 +221,7 @@ class User(Base):
     last_name = Column(String(100), nullable=False)
     email = Column(String(255), unique=True, nullable=False)
     phone = Column(String(20))
+    telegram_username = Column(String(100))
     additional_phone = Column(String(20))  # Alternative phone for login
     password_hash = Column(String(255), nullable=False)
     is_active = Column(Boolean, default=True)
